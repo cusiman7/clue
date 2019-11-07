@@ -62,8 +62,7 @@ struct Array {
 
 struct StringBuilder {
     StringBuilder() {
-        bufSize_ = 4096;
-        buf_ = static_cast<char*>(malloc(sizeof(char) * bufSize_));
+        Grow(4096);
     }
 
     ~StringBuilder() {
@@ -80,21 +79,47 @@ struct StringBuilder {
         va_end(copy);
         if (lineLen_ + len > 80) {
             lineLen_ = 0;
-            len = snprintf(buf_+i_, bufSize_-i_, "\n    ");
-            lineLen_ += len;
-            i_ += len;
+            AppendAndGrow("\n    ");
         }
-        len = vsnprintf(buf_+i_, bufSize_-i_, fmt, vaList);
-        lineLen_ += len;
-        i_ += len;
-        assert(i_ <= 4096);
+        AppendAndGrow(len, fmt, vaList);
         va_end(vaList);
     }
 
-    std::string_view GetString() const {
+    std::string_view GetStringView() const {
         return {buf_, static_cast<size_t>(i_)};
     }
 private:
+    void Grow(int newSize) {
+        bufSize_ = std::max(bufSize_*2, newSize);
+        buf_ = static_cast<char*>(realloc(buf_, sizeof(char) * bufSize_));
+    }
+
+    PRINTF_LIKE(2, 3)
+    void AppendAndGrow(const char* fmt, ...) {
+        va_list vaList;
+        va_start(vaList, fmt);
+        AppendAndGrow(fmt, vaList);
+        va_end(vaList);
+    }
+
+    void AppendAndGrow(const char* fmt, va_list vaList) {
+        va_list copy;
+        va_copy(copy, vaList);
+        int len = vsnprintf(nullptr, 0, fmt, copy);
+        va_end(copy);
+        AppendAndGrow(len, fmt, vaList);
+    }
+    
+    void AppendAndGrow(int len, const char* fmt, va_list vaList) {
+        if (i_ + len + 1 >= bufSize_) {
+            Grow(i_ + len +  1); // plus 1 for nullchar
+        }
+        assert(i_ + len < bufSize_);
+        int added = vsnprintf(buf_+i_, bufSize_-i_, fmt, vaList);
+        lineLen_ += added;
+        i_ += added;
+    }
+
     int i_ = 0;
     int lineLen_ = 0;
     char* buf_ = nullptr;
@@ -227,7 +252,7 @@ struct CommandLine {
             }
         }
 
-        auto sv = stringBuilder.GetString();
+        auto sv = stringBuilder.GetStringView();
         printf("%.*s\n", static_cast<int>(sv.size()), sv.data());
 
         std::exit(0);

@@ -14,16 +14,22 @@
 #include <cstdarg>
 
 // TODO:
-// Finish moving the StringBuilder
 // vector<type>
 // Enum for "choices" (from_string helper required though?)
 // arg descriptions
 // proper line breaking
 
+#if defined(__GNUC__) || defined(__clang)
+#define PRINTF_LIKE(a, b) __attribute__((format(printf, (a), (b))))
+#else
+#define PRINTF_LIKE(a, b)
+#endif
+
 inline void ReportError(const char* fmt, va_list vaList) {
     vfprintf(stderr, fmt, vaList);
 }
 
+PRINTF_LIKE(1, 2)
 inline void ReportError(const char* fmt, ...) {
     va_list vaList;
     va_start(vaList, fmt);
@@ -31,6 +37,7 @@ inline void ReportError(const char* fmt, ...) {
     va_end(vaList);
 }
 
+PRINTF_LIKE(2, 3)
 inline void Assert(bool assertion, const char* fmt, ...) {
     if (!assertion) {
         va_list vaList;
@@ -63,7 +70,8 @@ struct StringBuilder {
         free(buf_);
     }
 
-    void AppendString(const char* fmt, ...) {
+    PRINTF_LIKE(2, 3)
+    void Append(const char* fmt, ...) {
         va_list vaList;
         va_list copy;
         va_start(vaList, fmt);
@@ -165,82 +173,62 @@ struct CommandLine {
     template <typename ...Args>
     void Add(std::string_view name, Args&&... args) {
         for (const auto& arg : args_) {
-            Assert(name != arg.name, "Name \"%s\" already registered\n", name);
+            Assert(name != arg.name, "Name \"%.*s\" already registered\n", static_cast<int>(name.size()), name.data());
         }
         args_.emplace_back(name, std::forward<Args&&>(args)...);
     }
 
     void PrintUsageAndExit(int argc, char** argv) const {
-        constexpr int bufSize = 4096;
-        char buf[bufSize];
-        int i = 0;
-        int lineLen = 0;
-        auto AppendStr = [&i, &lineLen, &buf](const char* fmt, ...) {
-            va_list vaList;
-            va_list copy;
-            va_start(vaList, fmt);
-            va_copy(copy, vaList);
-            int len = vsnprintf(nullptr, 0, fmt, copy);
-            va_end(copy);
-            if (lineLen + len > 80) {
-                lineLen = 0;
-                len = snprintf(buf+i, bufSize-i, "\n    ");
-                lineLen += len;
-                i += len;
-            }
-            len = vsnprintf(buf+i, bufSize-i, fmt, vaList);
-            lineLen += len;
-            i += len;
-            assert(i <= 4096);
-            va_end(vaList);
-        };
-        
+
+        StringBuilder stringBuilder;
 
         // Default construct a T, for type info of ArrayMembers and default values
         const static T t = {};
 
         // build usage line
-        AppendStr("usage: %s", argv[0]);
+        stringBuilder.Append("usage: %s", argv[0]);
         for (const auto& arg : args_) {
             if (auto intVariant = std::get_if<IntVariant>(&arg.argument)) {
                 if (auto arrayPtr = std::get_if<Array<int>>(intVariant)) {
                     size_t size = arrayPtr->end - arrayPtr->begin;
-                    AppendStr(" [-%s <int[%d]>]", arg.name.data(), size);
+                    stringBuilder.Append(" [-%s <int[%zu]>]", arg.name.data(), size);
                 } else if (auto arrayMemberVariant = std::get_if<ArrayMemberVariant<int>>(intVariant)) {
                     size_t size = std::visit([](auto arrayMember) {
                         return (t.*arrayMember).size();
                     }, *arrayMemberVariant);
-                    AppendStr(" [-%s <int[%d]>]", arg.name.data(), size);
+                    stringBuilder.Append(" [-%s <int[%zu]>]", arg.name.data(), size);
                 }
             } else if (auto floatVariant = std::get_if<FloatVariant>(&arg.argument)) {
                 if (auto arrayPtr = std::get_if<Array<float>>(floatVariant)) {
                     size_t size = arrayPtr->end - arrayPtr->begin;
-                    AppendStr(" [-%s <float[%d]>]", arg.name.data(), size);
+                    stringBuilder.Append(" [-%s <float[%zu]>]", arg.name.data(), size);
                 } else if (auto arrayPtr = std::get_if<Array<double>>(floatVariant)) {
                     size_t size = arrayPtr->end - arrayPtr->begin;
-                    AppendStr(" [-%s <double[%d]>]", arg.name.data(), size);
+                    stringBuilder.Append(" [-%s <double[%zu]>]", arg.name.data(), size);
                 } else if (auto arrayMemberVariant = std::get_if<ArrayMemberVariant<float>>(floatVariant)) {
                     size_t size = std::visit([](auto arrayMember) {
                         return (t.*arrayMember).size();
                     }, *arrayMemberVariant);
-                    AppendStr(" [-%s <float[%d]>]", arg.name.data(), size);
+                    stringBuilder.Append(" [-%s <float[%zu]>]", arg.name.data(), size);
                 } else if (auto arrayMemberVariant = std::get_if<ArrayMemberVariant<double>>(floatVariant)) {
                     size_t size = std::visit([](auto arrayMember) {
                         return (t.*arrayMember).size();
                     }, *arrayMemberVariant);
-                    AppendStr(" [-%s <double[%d]>]", arg.name.data(), size);
+                    stringBuilder.Append(" [-%s <double[%zu]>]", arg.name.data(), size);
                 } else if (std::holds_alternative<float*>(*floatVariant) || std::holds_alternative<float T::*>(*floatVariant)) {
-                    AppendStr(" [-%s <float>]", arg.name.data());
+                    stringBuilder.Append(" [-%s <float>]", arg.name.data());
                 } else if (std::holds_alternative<double*>(*floatVariant) || std::holds_alternative<double T::*>(*floatVariant)) {
-                    AppendStr(" [-%s <double>]", arg.name.data());
+                    stringBuilder.Append(" [-%s <double>]", arg.name.data());
                 }
             } else if (auto stringVariantPtr = std::get_if<StringVariant>(&arg.argument)) {
-                AppendStr(" [-%s %s]", arg.name.data(), "<string>");
+                stringBuilder.Append(" [-%s %s]", arg.name.data(), "<string>");
             } else if (std::holds_alternative<BoolVariant>(arg.argument)) {
-                AppendStr(" [-%s]", arg.name.data());
+                stringBuilder.Append(" [-%s]", arg.name.data());
             }
         }
-        printf("%s\n", buf);
+
+        auto sv = stringBuilder.GetString();
+        printf("%.*s\n", static_cast<int>(sv.size()), sv.data());
 
         std::exit(0);
     }

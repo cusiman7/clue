@@ -3,8 +3,14 @@ project(cl CXX)
 set(CMAKE_CXX_STANDARD 17)
 
 include_directories(include)
+
+add_executable(simple
+  examples/simple.cpp
+)
+target_compile_options(simple PRIVATE -Wall -Werror -Wpedantic)
+
 add_executable(features
-  include/cl/cl.h
   examples/features.cpp
 )
 target_compile_options(features PRIVATE -Wall -Werror -Wpedantic)
+

@@ -1,4 +1,4 @@
-#include <cl/cl.h>
+#include <clue/clue.h>
 
 struct Args {
     bool hello = false;
@@ -9,7 +9,7 @@ struct Args {
     std::string_view sv;
     std::array<int, 3> veci = {1, 2, 3};
     std::array<float, 3> vecf = {1, 2, 3};
-    std::array<double, 4> quat;
+    std::array<double, 4> quat = {0, 0, 0, 1};
 };
 
 int main(int argc, char** argv) {
@@ -23,7 +23,7 @@ int main(int argc, char** argv) {
     std::array<double, 3> vecd = {0, 0, 0};
     std::string_view str_view;
 
-    rac::CommandLine<Args> cl("Features", "This is a test program for testing command line parsing and all the different ways one might want to parse things.\n\n"
+    clue::CommandLine<Args> cl("Features", "This is a test program for testing command line parsing and all the different ways one might want to parse things.\n\n"
                          "Our tenets for CommandLine are:\n"
                          "    1. Great for the command line user\n"
                          "    2. Great for the command line programmer\n"
@@ -38,7 +38,6 @@ int main(int argc, char** argv) {
     cl.Add("name", &Args::s, "A name");
     cl.Add("name_view", &Args::sv, "Also a name");
     cl.Add("raw_veci", &veci, "A \"raw veci\"");
-
 
     cl.Add("raw_hello", &hello, "Another way of saying hello, but to a bool, not a member");
     cl.Add("raw_int", &i, "Another way of passing an integer, also not a member");

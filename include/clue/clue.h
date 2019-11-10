@@ -41,10 +41,10 @@ struct ParseResult {
 
 enum ParseFlags : uint64_t {
     kNone             = 0,
-    kExitOnError      = 1, // If any error is reported, immediatley exit. Normal behavior is to return ParseResult{T, false}. Used with ParseArgs only.
-    kSkipUnrecognized = 2, // Skip over unrecognized arguments. Normal behavior is to error out on first error. Used with ParseArgs only.
+    kNoExitOnError    = 1, // If any error is encountered, don't exit. Normal behavior is to call exit(1) on error. If set, ParseResult{T, false} will be returned from ParseArgs on error. Used with ParseArgs only.
+    kSkipUnrecognized = 2, // Skip over unrecognized arguments. Normal behavior is to error out on first unrecognized argument. Used with ParseArgs only.
     kNoAutoHelp       = 4, // Skip auto generating help args "-h", "-help", "--help", and "/?". Used with ParseArgs only.
-    kNoDefault        = 8  // Skip outputting defaults. Normal behavior is to print "(Default: <defaults here>)". Can be used for an entire ParseArgs (used with auto-help) or with Add for individual args
+    kNoDefault        = 8  // Skip outputting defaults. Normal behavior is to print "(Default: <defaults here>)". Can be used for an entire ParseArgs (used with auto-help) or with CommandLine::Add for individual args
 };
 
 struct StringBuilder {
@@ -104,11 +104,11 @@ struct CommandLine {
     // description: used when generating help. Line breaks and formatted are handled for
     // flags: Some ParseFlags are used when parsing and generating help, like for generating default strings or not
     template <typename U>
-    void Add(std::string_view name, U&& valuePtr, std::string_view description = "", ParseFlags flags = kNone) {
+    void Add(std::string_view name, U&& valuePtr, std::string_view description = "", uint64_t flags = kNone) {
         for (const auto& arg : args_) {
             Assert(name != arg.name, "Name \"%.*s\" already registered\n", static_cast<int>(name.size()), name.data());
         }
-        args_.emplace_back(name, std::forward<U&&>(valuePtr), flags, description);
+        args_.emplace_back(name, std::forward<U&&>(valuePtr), static_cast<ParseFlags>(flags), description);
     }
 
     // Parse argv, matching args added with Add before ParseArgs was called
@@ -116,8 +116,8 @@ struct CommandLine {
     // On failure returns a ParseResult{T, false} where T holds the arguments parsed successfully until the failure
     //    Note: If there are valid arguments after the failed argument that could have been parsed into T, they will have been skipped
     // Flags
-    ParseResult<T> ParseArgs(const int argc, char** const argv, ParseFlags flags = kNone) {
-        currentFlags_ = flags;
+    ParseResult<T> ParseArgs(const int argc, char** const argv, uint64_t flags = kNone) {
+        currentFlags_ = static_cast<ParseFlags>(flags);
         T t;
 
         int argIndex = 1;
@@ -142,7 +142,7 @@ struct CommandLine {
                     if (auto intVariant = std::get_if<IntVariant>(&arg.argument)) {
                         auto ParseInt = [this, argc, &argv, &argIndex, &token, tokenLen]() -> ParseResult<int> {
                             if (argIndex >= argc-1) {
-                                ReportError("Expected int value for argument \"%.*s\"\n", tokenLen, token.data());
+                                ReportError("\"%.*s\" expected an int value\n", tokenLen, token.data());
                                 return {0, false};
                             }
                             auto valueToken = std::string_view(argv[++argIndex]);
@@ -150,10 +150,11 @@ struct CommandLine {
                             int v;
                             auto result = std::from_chars(valueToken.data(), valueToken.data()+valueToken.size(), v);
                             if (result.ec == std::errc::invalid_argument) {
-                                ReportError("Expected a string representing an int but instead found \"%.*s\"\n", valueTokenLen, valueToken.data());
+                                ReportError("\"%.*s\" expected a string representing an int but instead found \"%.*s\"\n", tokenLen, token.data(), valueTokenLen, valueToken.data());
                                 return {v, false};
                             } else if (result.ec == std::errc::result_out_of_range) {
-                                ReportError("int value \"%.*s\" out of range [%d, %d]\n", valueTokenLen, valueToken.data(), std::numeric_limits<int>::min(), std::numeric_limits<int>::max());
+                                ReportError("\"%.*s\" int value \"%.*s\" out of range [%d, %d]\n",
+                                    tokenLen, token.data(), valueTokenLen, valueToken.data(), std::numeric_limits<int>::min(), std::numeric_limits<int>::max());
                                 return {v, false};
                             }
                             return {v, true};
@@ -186,22 +187,23 @@ struct CommandLine {
                     } else if (auto floatVariant = std::get_if<FloatVariant>(&arg.argument)) {
                         auto ParseFloat = [this, argc, &argv, &argIndex, &token, tokenLen]() -> ParseResult<float> {
                             if (argIndex >= argc-1) {
-                                ReportError("Expected float value for argument \"%.*s\"\n", tokenLen, token.data());
+                                ReportError("\"%.*s\" expected a float value\n", tokenLen, token.data());
                                 return {0.0f, false};
                             }
                             auto valueToken = std::string_view(argv[++argIndex]);
                             auto valueTokenLen = static_cast<int>(valueToken.size());
                             
                             auto v = strtof(valueToken.data(), nullptr);
+                            // TODO: 0 could be from garbage strings!
                             if (v == HUGE_VAL || v == HUGE_VALF || v == HUGE_VALL) {
-                                ReportError("float value \"%.*s\" out of range\n", valueTokenLen, valueToken.data());
+                                ReportError("\"%.*s\" float value \"%.*s\" out of range\n", tokenLen, token.data(), valueTokenLen, valueToken.data());
                                 return {v, false};
                             }
                             return {v, true};
                         };
                         auto ParseDouble = [this, argc, &argv, &argIndex, &token, tokenLen]() -> ParseResult<double> {
                             if (argIndex >= argc-1) {
-                                ReportError("Expected double value for argument \"%.*s\"\n", tokenLen, token.data());
+                                ReportError("\"%.*s\" expected a double value\n", tokenLen, token.data());
                                 return {0.0, false};
                             }
                             auto valueToken = std::string_view(argv[++argIndex]);
@@ -209,7 +211,7 @@ struct CommandLine {
                             
                             auto v = strtod(valueToken.data(), nullptr);
                             if (v == HUGE_VAL || v == HUGE_VALF || v == HUGE_VALL) {
-                                ReportError("double value \"%.*s\" out of range\n", valueTokenLen, valueToken.data());
+                                ReportError("\"%.*s\" double value \"%.*s\" out of range\n", tokenLen, token.data(), valueTokenLen, valueToken.data());
                                 return {v, false};
                             }
                             return {v, true};
@@ -269,7 +271,7 @@ struct CommandLine {
                         }
                     } else if (auto stringVariant = std::get_if<StringVariant>(&arg.argument)) {
                         if (argIndex >= argc-1) {
-                            ReportError("Expected string value for argument \"%.*s\"\n", tokenLen, token.data());
+                            ReportError("\"%.*s\" expected a string value\n", tokenLen, token.data());
                             return {t, false};
                         }
                         auto valueToken = std::string_view(argv[++argIndex]);
@@ -300,7 +302,7 @@ struct CommandLine {
     }
 
     // Prints the full usage string to stdout
-    void PrintUsage(ParseFlags flags, int argc = 0, char** const argv = nullptr) const {
+    void PrintUsage(uint64_t flags, int argc = 0, char** const argv = nullptr) const {
         StringBuilder usageBuilder; // For building the first usage lines
         StringBuilder descriptionBuilder; // For building the description line per argument
         StringBuilder defaultBuilder(64); // Used for building strings for default values
@@ -466,7 +468,7 @@ struct CommandLine {
             // Append every argument's description
             descriptionBuilder.AppendNatural(descriptionIndent, arg.description.data(), arg.description.size());
 
-            if (!(currentFlags_ & kNoDefault) || !(arg.flags & kNoDefault)) {
+            if (!(currentFlags_ & kNoDefault) && !(arg.flags & kNoDefault)) {
                 auto sv = defaultBuilder.GetStringView();
                 descriptionBuilder.AddChar(' ');
                 descriptionBuilder.AppendAtomic(descriptionIndent, "(Default: %.*s)", static_cast<int>(sv.size()), sv.data());
@@ -553,7 +555,7 @@ private:
 
     inline void ReportError(const char* fmt, va_list vaList) {
         vfprintf(stderr, fmt, vaList);
-        if (currentFlags_ & kExitOnError) {
+        if (!(currentFlags_ & kNoExitOnError)) {
             std::exit(1);
         }
     }

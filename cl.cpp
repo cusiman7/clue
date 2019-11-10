@@ -1,10 +1,32 @@
+/*
+MIT License
+
+Copyright (c) [2019] [Rob Cusimano]
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+*/
 
 #include <array>
 #include <string>
 #include <string_view>
 #include <variant>
 #include <vector>
-#include <functional>
 #include <charconv>
 #include <limits>
 #include <type_traits>
@@ -13,11 +35,15 @@
 #include <cstdio>
 #include <cstdarg>
 
+// Tenets
+// 1. Great for the command line user
+// 2. Great for the command line programmer
+// 3. Understandable for us to program and maintain
+
 // TODO:
 // vector<type>
 // Enum for "choices" (from_string helper required though?)
-// arg descriptions
-// proper line breaking
+// custom "user" types for the programmer
 
 #if defined(__GNUC__) || defined(__clang)
 #define PRINTF_LIKE(a, b) __attribute__((format(printf, (a), (b))))
@@ -60,6 +86,19 @@ struct Array {
     T* end;
 };
 
+struct Vec {
+    float x, y, z;
+};
+    
+PRINTF_LIKE(1, 2)
+int FormattedLength(const char* fmt, ...) {
+    va_list vaList;
+    va_start(vaList, fmt);
+    int len = vsnprintf(nullptr, 0, fmt, vaList);
+    va_end(vaList);
+    return len;
+}
+
 struct StringBuilder {
     StringBuilder() {
         Grow(4096);
@@ -69,20 +108,66 @@ struct StringBuilder {
         free(buf_);
     }
 
-    PRINTF_LIKE(2, 3)
-    void Append(const char* fmt, ...) {
+    void NewLine(int count = 1) {
+        AppendCharAndGrow('\n', count);
+        lineLen_ = 0;
+    }
+
+    void AddChar(char c, int count = 1) {
+        AppendCharAndGrow(c, count);
+    }
+
+    // Append an atomic unit that cannot be broken. 
+    // If needed a newline and indentation will be inserted before appending.
+    PRINTF_LIKE(3, 4)
+    void AppendAtomic(int indent, const char* fmt, ...) {
         va_list vaList;
         va_list copy;
         va_start(vaList, fmt);
         va_copy(copy, vaList);
         int len = vsnprintf(nullptr, 0, fmt, copy);
         va_end(copy);
-        if (lineLen_ + len > 80) {
-            lineLen_ = 0;
-            AppendAndGrow("\n    ");
+        if (lineLen_ + len > maxLineLen_) {
+            NewLine();
+            AddChar(' ', indent);
         }
         AppendAndGrow(len, fmt, vaList);
         va_end(vaList);
+    }
+
+    // Append a natural string. Strings will be broken at natural English positions such as whitespace, tabs and newlines
+    void AppendNatural(int indent, const char* str, int length) {
+        int currentLineStart = 0;
+        int lastBreakablePos = 0;
+        int cursor = 0;
+        while(cursor < length && str[cursor] != '\0') {
+            // If we come across whitespace, consider that a natural break position
+            if (str[cursor] == ' ' || str[cursor] == '\t') {
+                lastBreakablePos = cursor;
+            }
+
+            // If we encounter a newline, break here and continue
+            if (str[cursor] == '\n') {
+                AppendAndGrow("%.*s", cursor - currentLineStart + 1, &str[currentLineStart]); // no \n since the string has a newline
+                lineLen_ = 0; // No NewLine() as the string had a newline
+                AddChar(' ', indent);
+                cursor++;
+                currentLineStart = cursor;
+                continue;
+            }
+
+            // If we are at our maxLineLen_, break at the lastBreakablePos and continue from there + 1 
+            if (cursor - currentLineStart + lineLen_ > maxLineLen_) {
+                AppendAndGrow("%.*s", lastBreakablePos - currentLineStart + 1, &str[currentLineStart]);
+                NewLine();
+                AddChar(' ', indent);
+                cursor = lastBreakablePos + 1;
+                currentLineStart = cursor;
+                continue;
+            }
+            cursor++;
+        } 
+        AppendAndGrow("%.*s", cursor - currentLineStart, &str[currentLineStart]);
     }
 
     std::string_view GetStringView() const {
@@ -119,6 +204,20 @@ private:
         lineLen_ += added;
         i_ += added;
     }
+    
+    void AppendCharAndGrow(char c, int count = 1) {
+        if (i_ + count + 1 >= bufSize_) {
+            Grow(i_ + count +  1); // plus 1 for nullchar
+        }
+        assert(i_ + count < bufSize_);
+        for (int i = 0; i < count; ++i) {
+            int added = snprintf(buf_+i_, bufSize_-i_, "%c", c);
+            lineLen_ += added;
+            i_ += added;
+        }
+    }
+
+    static constexpr int maxLineLen_ = 120;
 
     int i_ = 0;
     int lineLen_ = 0;
@@ -191,70 +290,131 @@ struct CommandLine {
 
         std::string_view name;
         ArgumentVariant argument;
-
         std::string_view description;
     };
 
-    template <typename ...Args>
-    void Add(std::string_view name, Args&&... args) {
+    template <typename U>
+    void Add(std::string_view name, U&& valuePtr, std::string_view description = "") {
         for (const auto& arg : args_) {
             Assert(name != arg.name, "Name \"%.*s\" already registered\n", static_cast<int>(name.size()), name.data());
         }
-        args_.emplace_back(name, std::forward<Args&&>(args)...);
+        args_.emplace_back(name, std::forward<U&&>(valuePtr), description);
     }
 
     void PrintUsageAndExit(int argc, char** argv) const {
 
-        StringBuilder stringBuilder;
+        StringBuilder usageBuilder; // For building the first usage line
+        StringBuilder descriptionBuilder; // For building the description line per argument
 
         // Default construct a T, for type info of ArrayMembers and default values
         const static T t = {};
 
         // build usage line
-        stringBuilder.Append("usage: %s", argv[0]);
+        // Looks like:
+        // usage: <program> [-flag0] [-arg1 <float>] [-arg2 <string>] [-arg3 <int[3]>]
+        int usageIndent = FormattedLength("usage: %s", argv[0]);
+        usageBuilder.AppendAtomic(0, "usage: %s", argv[0]);
+
+        // build descriptions 
+        // Looke like:
+        // Long program description here
+        //     argument: argument's description
+        //
+        //     other_argument: other argument's description
+        //
+        descriptionBuilder.AppendNatural(0, description_.data(), static_cast<int>(description_.size()));
+        descriptionBuilder.NewLine(2);
+        //const char* descriptionNameFmt = "    %.*s: ";
+
         for (const auto& arg : args_) {
+            auto argNameLen = static_cast<int>(arg.name.size());
+            auto argNameData = arg.name.data();
+
+            int descriptionIndent = 0;
+
             if (auto intVariant = std::get_if<IntVariant>(&arg.argument)) {
                 if (auto arrayPtr = std::get_if<Array<int>>(intVariant)) {
                     size_t size = arrayPtr->end - arrayPtr->begin;
-                    stringBuilder.Append(" [-%s <int[%zu]>]", arg.name.data(), size);
+                    usageBuilder.AppendAtomic(usageIndent, " [-%.*s <int[%zu]>]", argNameLen, argNameData, size);
+
+                    descriptionIndent = FormattedLength("    -%.*s <int[%zu]>: ", argNameLen, argNameData, size);
+                    descriptionBuilder.AppendAtomic(0, "    -%.*s <int[%zu]>: ", argNameLen, argNameData, size);
                 } else if (auto arrayMemberVariant = std::get_if<ArrayMemberVariant<int>>(intVariant)) {
                     size_t size = std::visit([](auto arrayMember) {
                         return (t.*arrayMember).size();
                     }, *arrayMemberVariant);
-                    stringBuilder.Append(" [-%s <int[%zu]>]", arg.name.data(), size);
+                    usageBuilder.AppendAtomic(usageIndent, " [-%.*s <int[%zu]>]", argNameLen, argNameData, size);
+
+                    descriptionIndent = FormattedLength("    -%.*s <int[%zu]>: ", argNameLen, argNameData, size);
+                    descriptionBuilder.AppendAtomic(0, "    -%.*s <int[%zu]>: ", argNameLen, argNameData, size);
+                } else { // Either int or int T::*
+                    usageBuilder.AppendAtomic(usageIndent, " [-%.*s <int>]", argNameLen, argNameData);
+
+                    descriptionIndent = FormattedLength("    -%.*s <int>: ", argNameLen, argNameData);
+                    descriptionBuilder.AppendAtomic(0, "    -%.*s <int>: ", argNameLen, argNameData);
                 }
             } else if (auto floatVariant = std::get_if<FloatVariant>(&arg.argument)) {
                 if (auto arrayPtr = std::get_if<Array<float>>(floatVariant)) {
                     size_t size = arrayPtr->end - arrayPtr->begin;
-                    stringBuilder.Append(" [-%s <float[%zu]>]", arg.name.data(), size);
+                    usageBuilder.AppendAtomic(usageIndent, " [-%.*s <float[%zu]>]", argNameLen, argNameData, size);
+
+                    descriptionIndent = FormattedLength("    -%.*s <float[%zu]>: ", argNameLen, argNameData, size);
+                    descriptionBuilder.AppendAtomic(0, "    -%.*s <float[%zu]>: ", argNameLen, argNameData, size);
                 } else if (auto arrayPtr = std::get_if<Array<double>>(floatVariant)) {
                     size_t size = arrayPtr->end - arrayPtr->begin;
-                    stringBuilder.Append(" [-%s <double[%zu]>]", arg.name.data(), size);
+                    usageBuilder.AppendAtomic(usageIndent, " [-%.*s <double[%zu]>]", argNameLen, argNameData, size);
+                    
+                    descriptionIndent = FormattedLength("    -%.*s <double[%zu]>: ", argNameLen, argNameData, size);
+                    descriptionBuilder.AppendAtomic(0, "    -%.*s <double[%zu]>: ", argNameLen, argNameData, size);
                 } else if (auto arrayMemberVariant = std::get_if<ArrayMemberVariant<float>>(floatVariant)) {
                     size_t size = std::visit([](auto arrayMember) {
                         return (t.*arrayMember).size();
                     }, *arrayMemberVariant);
-                    stringBuilder.Append(" [-%s <float[%zu]>]", arg.name.data(), size);
+                    usageBuilder.AppendAtomic(usageIndent, " [-%.*s <float[%zu]>]", argNameLen, argNameData, size);
+                    
+                    descriptionIndent = FormattedLength("    -%.*s <float[%zu]>: ", argNameLen, argNameData, size);
+                    descriptionBuilder.AppendAtomic(0, "    -%.*s <float[%zu]>: ", argNameLen, argNameData, size);
                 } else if (auto arrayMemberVariant = std::get_if<ArrayMemberVariant<double>>(floatVariant)) {
                     size_t size = std::visit([](auto arrayMember) {
                         return (t.*arrayMember).size();
                     }, *arrayMemberVariant);
-                    stringBuilder.Append(" [-%s <double[%zu]>]", arg.name.data(), size);
+                    usageBuilder.AppendAtomic(usageIndent, " [-%.*s <double[%zu]>]", argNameLen, argNameData, size);
+                    
+                    descriptionIndent = FormattedLength("    -%.*s <double[%zu]>: ", argNameLen, argNameData, size);
+                    descriptionBuilder.AppendAtomic(0, "    -%.*s <double[%zu]>: ", argNameLen, argNameData, size);
                 } else if (std::holds_alternative<float*>(*floatVariant) || std::holds_alternative<float T::*>(*floatVariant)) {
-                    stringBuilder.Append(" [-%s <float>]", arg.name.data());
+                    usageBuilder.AppendAtomic(usageIndent, " [-%.*s <float>]", argNameLen, argNameData);
+                    
+                    descriptionIndent = FormattedLength("    -%.*s <float>: ", argNameLen, argNameData);
+                    descriptionBuilder.AppendAtomic(0, "    -%.*s <float>: ", argNameLen, argNameData);
                 } else if (std::holds_alternative<double*>(*floatVariant) || std::holds_alternative<double T::*>(*floatVariant)) {
-                    stringBuilder.Append(" [-%s <double>]", arg.name.data());
+                    usageBuilder.AppendAtomic(usageIndent, " [-%.*s <double>]", argNameLen, argNameData);
+                    
+                    descriptionIndent = FormattedLength("    -%.*s <double>: ", argNameLen, argNameData);
+                    descriptionBuilder.AppendAtomic(0, "    -%.*s <double>: ", argNameLen, argNameData);
                 }
             } else if (auto stringVariantPtr = std::get_if<StringVariant>(&arg.argument)) {
-                stringBuilder.Append(" [-%s %s]", arg.name.data(), "<string>");
+                usageBuilder.AppendAtomic(usageIndent, " [-%.*s <string>]", argNameLen, argNameData);
+                
+                descriptionIndent = FormattedLength("    -%.*s <string>: ", argNameLen, argNameData);
+                descriptionBuilder.AppendAtomic(0, "    -%.*s <string>: ", argNameLen, argNameData);
             } else if (std::holds_alternative<BoolVariant>(arg.argument)) {
-                stringBuilder.Append(" [-%s]", arg.name.data());
+                usageBuilder.AppendAtomic(usageIndent, " [-%.*s]", argNameLen, argNameData);
+                
+                descriptionIndent = FormattedLength("    -%.*s: ", argNameLen, argNameData);
+                descriptionBuilder.AppendAtomic(0, "    -%.*s: ", argNameLen, argNameData);
             }
+                    
+            // Append every argument's description
+            descriptionBuilder.AppendNatural(descriptionIndent, arg.description.data(), arg.description.size());
+            descriptionBuilder.NewLine(2);
         }
 
-        auto sv = stringBuilder.GetStringView();
-        printf("%.*s\n", static_cast<int>(sv.size()), sv.data());
-
+        auto sv = usageBuilder.GetStringView();
+        printf("%.*s\n\n", static_cast<int>(sv.size()), sv.data());
+        
+        sv = descriptionBuilder.GetStringView();
+        printf("%.*s", static_cast<int>(sv.size()), sv.data());
         std::exit(0);
     }
 
@@ -468,27 +628,31 @@ int main(int argc, char** argv) {
     std::array<double, 3> vecd = {0, 0, 0};
     std::string_view str_view;
 
-    CommandLine<Args> cl;
-    cl.Add("hello", &Args::hello);
-    cl.Add("veci", &Args::veci);
-    cl.Add("vecf", &Args::vecf);
-    cl.Add("quat", &Args::quat);
-    cl.Add("int", &Args::i);
-    cl.Add("float", &Args::f);
-    cl.Add("double", &Args::d);
-    cl.Add("name", &Args::s);
-    cl.Add("name_view", &Args::sv);
-    cl.Add("raw_veci", &veci);
+    CommandLine<Args> cl("This is a test program for testing command line parsing and all the different ways one might want to parse things.\n\n"
+                         "Our tenets for CommandLine are:\n"
+                         "    1. Great for the command line user\n"
+                         "    2. Great for the command line programmer\n"
+                         "    3. Understandable for us to program and maintain");
+    cl.Add("hello", &Args::hello, "say hello");
+    cl.Add("veci", &Args::veci, "3 int point");
+    cl.Add("vecf", &Args::vecf, "3 float point");
+    cl.Add("quat", &Args::quat, "A quaternion");
+    cl.Add("int", &Args::i, "The description of this arg is just way to long to be useful but we're using it here to test if line breaking is working as expected for variable descriptions. Does it?");
+    cl.Add("float", &Args::f, "A float");
+    cl.Add("double", &Args::d, "A double");
+    cl.Add("name", &Args::s, "A name");
+    cl.Add("name_view", &Args::sv, "Also a name");
+    cl.Add("raw_veci", &veci, "A \"raw veci\"");
 
 
-    cl.Add("raw_hello", &hello);
-    cl.Add("raw_int", &i);
-    cl.Add("raw_float", &f);
-    cl.Add("raw_double", &d);
-    cl.Add("raw_string", &s);
-    cl.Add("raw_vecf", &vecf);
-    cl.Add("raw_vecd", &vecd);
-    cl.Add("raw_strview", &str_view);
+    cl.Add("raw_hello", &hello, "Another way of saying hello, but to a bool, not a member");
+    cl.Add("raw_int", &i, "Another way of passing an integer, also not a member");
+    cl.Add("raw_float", &f, "Floats that are raw");
+    cl.Add("raw_double", &d, "Double");
+    cl.Add("raw_string", &s, "A string value");
+    cl.Add("raw_vecf", &vecf, "A 3 float vector");
+    cl.Add("raw_vecd", &vecd, "A 3 double vector");
+    cl.Add("raw_strview", &str_view, "Another string view to finish it all off");
 
     auto results = cl.ParseArgs(argc, argv);
     auto args = results.args;

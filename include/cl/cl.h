@@ -1,26 +1,4 @@
-/*
-MIT License
-
-Copyright (c) [2019] [Rob Cusimano]
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-*/
+#pragma once
 
 #include <array>
 #include <string>
@@ -41,9 +19,11 @@ SOFTWARE.
 // 3. Understandable for us to program and maintain
 
 // TODO:
+// Print default values in descriptions
 // vector<type>
 // Enum for "choices" (from_string helper required though?)
 // custom "user" types for the programmer
+// Windows support
 
 #if defined(__GNUC__) || defined(__clang)
 #define PRINTF_LIKE(a, b) __attribute__((format(printf, (a), (b))))
@@ -51,32 +31,11 @@ SOFTWARE.
 #define PRINTF_LIKE(a, b)
 #endif
 
-inline void ReportError(const char* fmt, va_list vaList) {
-    vfprintf(stderr, fmt, vaList);
-}
+namespace rac {
 
-PRINTF_LIKE(1, 2)
-inline void ReportError(const char* fmt, ...) {
-    va_list vaList;
-    va_start(vaList, fmt);
-    ReportError(fmt, vaList);
-    va_end(vaList);
-}
-
-PRINTF_LIKE(2, 3)
-inline void Assert(bool assertion, const char* fmt, ...) {
-    if (!assertion) {
-        va_list vaList;
-        va_start(vaList, fmt);
-        ReportError(fmt, vaList);
-        va_end(vaList);
-        std::abort();
-    }
-}
-    
-template <typename T>
-struct ParseResults {
-    T args;
+template <typename U>
+struct ParseResult {
+    U value;
     bool success;
 };
 
@@ -86,10 +45,6 @@ struct Array {
     T* end;
 };
 
-struct Vec {
-    float x, y, z;
-};
-    
 PRINTF_LIKE(1, 2)
 int FormattedLength(const char* fmt, ...) {
     va_list vaList;
@@ -118,7 +73,7 @@ struct StringBuilder {
     }
 
     // Append an atomic unit that cannot be broken. 
-    // If needed a newline and indentation will be inserted before appending.
+    // If needed, a newline + indentation will be inserted before appending.
     PRINTF_LIKE(3, 4)
     void AppendAtomic(int indent, const char* fmt, ...) {
         va_list vaList;
@@ -217,81 +172,26 @@ private:
         }
     }
 
-    static constexpr int maxLineLen_ = 120;
+    static constexpr int maxLineLen_ = 80;
 
-    int i_ = 0;
-    int lineLen_ = 0;
+    int i_ = 0; // our index into buf
+    int lineLen_ = 0; // length of the current in-progress line
     char* buf_ = nullptr;
     int bufSize_ = 0;
 };
 
+enum CLParseFlags {
+    kNone             = 0,
+    kNoAutoHelp       = 1,
+    kExitOnError      = 2,
+    kSkipUnrecognized = 4
+};
+
 template <typename T=std::monostate>
 struct CommandLine {
-    using ParseResults = ParseResults<T>;
-
-    template <typename U>
-    using ArrayMemberVariant = std::variant<std::array<U, 1> T::*, std::array<U, 2> T::*, std::array<U, 3> T::*, std::array<U, 4> T::*, std::array<U, 5> T::*,
-         std::array<U, 6> T::*, std::array<U, 7> T::*, std::array<U, 8> T::*, std::array<U, 9> T::*, std::array<U, 10> T::*>;
-    using IntVariant = std::variant<int*, int T::*, Array<int>, ArrayMemberVariant<int>>;
-    using FloatVariant = std::variant<float*, float T::*, double*, double T::*, Array<float>, Array<double>, ArrayMemberVariant<float>, ArrayMemberVariant<double>>;
-    using BoolVariant = std::variant<bool*, bool T::*>;
-    using StringVariant = std::variant<std::string_view*, std::string_view T::*, std::string*, std::string T::*>;
-
-    using ArgumentVariant = std::variant<IntVariant, FloatVariant, BoolVariant, StringVariant>;
-
-    template <typename A, typename ParseFunc>
-    bool ParseArray(A&& arrayPtr, ParseFunc&& parseFunc) {
-        auto* curr = arrayPtr->begin;
-        auto* end = arrayPtr->end;
-        while (curr != end) {
-            auto [v, success] = parseFunc();
-            if (!success) {
-                return false;
-            }
-            *curr = v;
-            curr++;
-        }
-        return true;
+    CommandLine(std::string_view name = "", std::string_view description = "")
+    : name_(name), description_(description) {
     }
-
-    template <typename AMVP, typename ParseFunc> 
-    bool ParseArrayMemberVariant(T& t, AMVP&& arrayMemberVariantPtr, ParseFunc&& parseFunc) {
-        return std::visit([&](auto& arrayMember) -> bool {
-            auto* curr = (t.*arrayMember).begin();
-            auto* end = (t.*arrayMember).end();
-            while (curr != end) {
-                auto [v, success] = parseFunc();
-                if (!success) {
-                    return false;
-                }
-                *curr = v;
-                curr++;
-            }
-            return true;
-        }, *arrayMemberVariantPtr);
-    }
-
-    CommandLine(std::string_view description = "") : description_(description) {
-    }
-
-    struct Arg {
-        template <typename V>
-        Arg(std::string_view name, V* value, std::string_view description = "") 
-            : name(name), argument(value), description(description) {
-        }
-        template <typename MemberT>
-        Arg(std::string_view name, MemberT T::* member, std::string_view description = "") 
-            : name(name), argument(member), description(description) {
-        }
-        template <typename U, size_t N>
-        Arg(std::string_view name, std::array<U, N>* array, std::string_view description = "")
-            : name(name), argument(Array<U>{array->begin(), array->end()}), description(description) {
-        }
-
-        std::string_view name;
-        ArgumentVariant argument;
-        std::string_view description;
-    };
 
     template <typename U>
     void Add(std::string_view name, U&& valuePtr, std::string_view description = "") {
@@ -301,9 +201,10 @@ struct CommandLine {
         args_.emplace_back(name, std::forward<U&&>(valuePtr), description);
     }
 
-    void PrintUsageAndExit(int argc, char** argv) const {
+    // Prints the full usage string to stdout and exits the program with std::exit(code)
+    void PrintUsageAndExit(int code) const {
 
-        StringBuilder usageBuilder; // For building the first usage line
+        StringBuilder usageBuilder; // For building the first usage lines
         StringBuilder descriptionBuilder; // For building the description line per argument
 
         // Default construct a T, for type info of ArrayMembers and default values
@@ -311,9 +212,9 @@ struct CommandLine {
 
         // build usage line
         // Looks like:
-        // usage: <program> [-flag0] [-arg1 <float>] [-arg2 <string>] [-arg3 <int[3]>]
-        int usageIndent = FormattedLength("usage: %s", argv[0]);
-        usageBuilder.AppendAtomic(0, "usage: %s", argv[0]);
+        // usage: <name> [-flag0] [-arg1 <float>] [-arg2 <string>] [-arg3 <int[3]>]
+        int usageIndent = FormattedLength("usage: %.*s", static_cast<int>(name_.size()), name_.data());
+        usageBuilder.AppendAtomic(0, "usage: %.*s", static_cast<int>(name_.size()), name_.data());
 
         // build descriptions 
         // Looke like:
@@ -415,22 +316,30 @@ struct CommandLine {
         
         sv = descriptionBuilder.GetStringView();
         printf("%.*s", static_cast<int>(sv.size()), sv.data());
-        std::exit(0);
+        std::exit(code);
     }
 
-    ParseResults ParseArgs(int argc, char** argv) {
+    // Parse argv, matching args added with Add before ParseArgs was called
+    // On success returns a ParseResult{T, true} with a newly constructed T filled in with options
+    // On failure returns a ParseResult{T, false} where T holds the arguments parsed successfully until the failure
+    //    Note: If there are valid arguments after the failed argument that could have been parsed into T, they will have been skipped
+    // Flags
+    ParseResult<T> ParseArgs(const int argc, char** const argv, int flags = 0) {
+        currentFlags_ = flags;
         T t;
 
         int argIndex = 1;
         while (argIndex < argc) {
             std::string_view token(argv[argIndex]);
-            if (token[0] != '-') {
-                ReportError("Argument \"%s\" does not start with '-'\n", token.data());
-                return {t, false};
+            auto tokenLen = static_cast<int>(token.size());
+            
+            if (!(flags & kNoAutoHelp) && (token == "-h" ||  token == "-help" || token == "--help" || token == "/?")) {
+                PrintUsageAndExit(1);
             }
 
-            if (token == "-h" ||  token == "-help" || token == "--help") {
-                PrintUsageAndExit(argc, argv);
+            if (token[0] != '-' && !(flags & kSkipUnrecognized)) {
+                ReportError("Argument \"%.*s\" does not start with '-'\n", tokenLen, token.data());
+                return {t, false};
             }
 
             bool matchedToken = false;
@@ -438,19 +347,20 @@ struct CommandLine {
                 if (arg.name == token.substr(1)) {
                     matchedToken = true;
                     if (auto intVariant = std::get_if<IntVariant>(&arg.argument)) {
-                        auto ParseInt = [argc, &argv, &argIndex, &token]() -> ParseResult<int> {
+                        auto ParseInt = [this, argc, &argv, &argIndex, &token, tokenLen]() -> ParseResult<int> {
                             if (argIndex >= argc-1) {
-                                ReportError("Expected int value for argument \"%s\"\n", token.data());
+                                ReportError("Expected int value for argument \"%.*s\"\n", tokenLen, token.data());
                                 return {0, false};
                             }
                             auto valueToken = std::string_view(argv[++argIndex]);
+                            auto valueTokenLen = static_cast<int>(valueToken.size());
                             int v;
                             auto result = std::from_chars(valueToken.data(), valueToken.data()+valueToken.size(), v);
                             if (result.ec == std::errc::invalid_argument) {
-                                ReportError("Expected a string representing an int but instead found \"%s\"\n", valueToken.data());
+                                ReportError("Expected a string representing an int but instead found \"%.*s\"\n", valueTokenLen, valueToken.data());
                                 return {v, false};
                             } else if (result.ec == std::errc::result_out_of_range) {
-                                ReportError("int value \"%s\" out of range [%d, %d]\n", valueToken.data(), std::numeric_limits<int>::min(), std::numeric_limits<int>::max());
+                                ReportError("int value \"%.*s\" out of range [%d, %d]\n", valueTokenLen, valueToken.data(), std::numeric_limits<int>::min(), std::numeric_limits<int>::max());
                                 return {v, false};
                             }
                             return {v, true};
@@ -481,30 +391,32 @@ struct CommandLine {
                             return {t, false};
                         }
                     } else if (auto floatVariant = std::get_if<FloatVariant>(&arg.argument)) {
-                        auto ParseFloat = [argc, &argv, &argIndex, &token]() -> ParseResult<float> {
+                        auto ParseFloat = [this, argc, &argv, &argIndex, &token, tokenLen]() -> ParseResult<float> {
                             if (argIndex >= argc-1) {
-                                ReportError("Expected float value for argument \"%s\"\n", token.data());
+                                ReportError("Expected float value for argument \"%.*s\"\n", tokenLen, token.data());
                                 return {0.0f, false};
                             }
                             auto valueToken = std::string_view(argv[++argIndex]);
+                            auto valueTokenLen = static_cast<int>(valueToken.size());
                             
                             auto v = strtof(valueToken.data(), nullptr);
                             if (v == HUGE_VAL || v == HUGE_VALF || v == HUGE_VALL) {
-                                ReportError("float value \"%s\" out of range\n", valueToken.data());
+                                ReportError("float value \"%.*s\" out of range\n", valueTokenLen, valueToken.data());
                                 return {v, false};
                             }
                             return {v, true};
                         };
-                        auto ParseDouble = [argc, &argv, &argIndex, &token]() -> ParseResult<double> {
+                        auto ParseDouble = [this, argc, &argv, &argIndex, &token, tokenLen]() -> ParseResult<double> {
                             if (argIndex >= argc-1) {
-                                ReportError("Expected double value for argument \"%s\"\n", token.data());
+                                ReportError("Expected double value for argument \"%.*s\"\n", tokenLen, token.data());
                                 return {0.0, false};
                             }
                             auto valueToken = std::string_view(argv[++argIndex]);
+                            auto valueTokenLen = static_cast<int>(valueToken.size());
                             
                             auto v = strtod(valueToken.data(), nullptr);
                             if (v == HUGE_VAL || v == HUGE_VALF || v == HUGE_VALL) {
-                                ReportError("double value \"%s\" out of range\n", valueToken.data());
+                                ReportError("double value \"%.*s\" out of range\n", valueTokenLen, valueToken.data());
                                 return {v, false};
                             }
                             return {v, true};
@@ -564,7 +476,7 @@ struct CommandLine {
                         }
                     } else if (auto stringVariant = std::get_if<StringVariant>(&arg.argument)) {
                         if (argIndex >= argc-1) {
-                            ReportError("Expected string value for argument \"%s\"\n", token.data());
+                            ReportError("Expected string value for argument \"%.*s\"\n", tokenLen, token.data());
                             return {t, false};
                         }
                         auto valueToken = std::string_view(argv[++argIndex]);
@@ -584,8 +496,8 @@ struct CommandLine {
                     }
                 }
             }
-            if (!matchedToken) {
-                ReportError("Unrecognized argument \"%s\"\n", token.data());
+            if (!matchedToken && !(flags & kSkipUnrecognized)) {
+                ReportError("Unrecognized argument \"%.*s\"\n", tokenLen, token.data());
                 return {t, false};
             }
             argIndex++;
@@ -596,96 +508,97 @@ struct CommandLine {
 
 private:
     template <typename U>
-    struct ParseResult {
-        U v;
-        bool success;
+    using ArrayMemberVariant = std::variant<std::array<U, 1> T::*, std::array<U, 2> T::*, std::array<U, 3> T::*, std::array<U, 4> T::*, std::array<U, 5> T::*,
+         std::array<U, 6> T::*, std::array<U, 7> T::*, std::array<U, 8> T::*, std::array<U, 9> T::*, std::array<U, 10> T::*>;
+    using IntVariant = std::variant<int*, int T::*, Array<int>, ArrayMemberVariant<int>>;
+    using FloatVariant = std::variant<float*, float T::*, double*, double T::*, Array<float>, Array<double>, ArrayMemberVariant<float>, ArrayMemberVariant<double>>;
+    using BoolVariant = std::variant<bool*, bool T::*>;
+    using StringVariant = std::variant<std::string_view*, std::string_view T::*, std::string*, std::string T::*>;
+
+    using ArgumentVariant = std::variant<IntVariant, FloatVariant, BoolVariant, StringVariant>;
+
+    struct Arg {
+        template <typename V>
+        Arg(std::string_view name, V* value, std::string_view description = "") 
+            : name(name), argument(value), description(description) {
+        }
+        template <typename MemberT>
+        Arg(std::string_view name, MemberT T::* member, std::string_view description = "") 
+            : name(name), argument(member), description(description) {
+        }
+        template <typename U, size_t N>
+        Arg(std::string_view name, std::array<U, N>* array, std::string_view description = "")
+            : name(name), argument(Array<U>{array->begin(), array->end()}), description(description) {
+        }
+
+        std::string_view name;
+        ArgumentVariant argument;
+        std::string_view description;
     };
+
+    template <typename A, typename ParseFunc>
+    bool ParseArray(A&& arrayPtr, ParseFunc&& parseFunc) {
+        auto* curr = arrayPtr->begin;
+        auto* end = arrayPtr->end;
+        while (curr != end) {
+            auto [v, success] = parseFunc();
+            if (!success) {
+                return false;
+            }
+            *curr = v;
+            curr++;
+        }
+        return true;
+    }
+
+    template <typename AMVP, typename ParseFunc> 
+    bool ParseArrayMemberVariant(T& t, AMVP&& arrayMemberVariantPtr, ParseFunc&& parseFunc) {
+        return std::visit([&](auto& arrayMember) -> bool {
+            auto* curr = (t.*arrayMember).begin();
+            auto* end = (t.*arrayMember).end();
+            while (curr != end) {
+                auto [v, success] = parseFunc();
+                if (!success) {
+                    return false;
+                }
+                *curr = v;
+                curr++;
+            }
+            return true;
+        }, *arrayMemberVariantPtr);
+    }
+
+    inline void ReportError(const char* fmt, va_list vaList) {
+        vfprintf(stderr, fmt, vaList);
+        if (currentFlags_ & kExitOnError) {
+            std::exit(1);
+        }
+    }
+
+    PRINTF_LIKE(2, 3)
+    inline void ReportError(const char* fmt, ...) {
+        va_list vaList;
+        va_start(vaList, fmt);
+        ReportError(fmt, vaList);
+        va_end(vaList);
+    }
+
+    PRINTF_LIKE(3, 4)
+    inline void Assert(bool assertion, const char* fmt, ...) {
+        if (!assertion) {
+            va_list vaList;
+            va_start(vaList, fmt);
+            ReportError(fmt, vaList);
+            va_end(vaList);
+            std::exit(-1);
+        }
+    }
+
+    std::string_view name_;
     std::string_view description_;
     std::vector<Arg> args_;
+    int currentFlags_ = 0;
 };
 
-struct Args {
-    bool hello = false;
-    int i = 0;
-    float f = 0;
-    double d = 0;
-    std::string s = "default";
-    std::string_view sv;
-    std::array<int, 3> veci = {1, 2, 3};
-    std::array<float, 3> vecf = {1, 2, 3};
-    std::array<double, 4> quat;
-};
+} // namespace rac
 
-int main(int argc, char** argv) {
-
-    bool hello = false;
-    int i = 0;
-    float f = 0;
-    double d = 0;
-    std::string s;
-    std::array<int, 3> veci = {0, 0, 0};
-    std::array<float, 3> vecf = {0, 0, 0};
-    std::array<double, 3> vecd = {0, 0, 0};
-    std::string_view str_view;
-
-    CommandLine<Args> cl("This is a test program for testing command line parsing and all the different ways one might want to parse things.\n\n"
-                         "Our tenets for CommandLine are:\n"
-                         "    1. Great for the command line user\n"
-                         "    2. Great for the command line programmer\n"
-                         "    3. Understandable for us to program and maintain");
-    cl.Add("hello", &Args::hello, "say hello");
-    cl.Add("veci", &Args::veci, "3 int point");
-    cl.Add("vecf", &Args::vecf, "3 float point");
-    cl.Add("quat", &Args::quat, "A quaternion");
-    cl.Add("int", &Args::i, "The description of this arg is just way to long to be useful but we're using it here to test if line breaking is working as expected for variable descriptions. Does it?");
-    cl.Add("float", &Args::f, "A float");
-    cl.Add("double", &Args::d, "A double");
-    cl.Add("name", &Args::s, "A name");
-    cl.Add("name_view", &Args::sv, "Also a name");
-    cl.Add("raw_veci", &veci, "A \"raw veci\"");
-
-
-    cl.Add("raw_hello", &hello, "Another way of saying hello, but to a bool, not a member");
-    cl.Add("raw_int", &i, "Another way of passing an integer, also not a member");
-    cl.Add("raw_float", &f, "Floats that are raw");
-    cl.Add("raw_double", &d, "Double");
-    cl.Add("raw_string", &s, "A string value");
-    cl.Add("raw_vecf", &vecf, "A 3 float vector");
-    cl.Add("raw_vecd", &vecd, "A 3 double vector");
-    cl.Add("raw_strview", &str_view, "Another string view to finish it all off");
-
-    auto results = cl.ParseArgs(argc, argv);
-    auto args = results.args;
-    if (!results.success) {
-        printf("Arg parsing failed\n");
-    }
-    printf("Args: \n");
-    printf("  hello = %s\n", args.hello ? "true" : "false");
-    printf("  i = %d\n", args.i);
-    printf("  f = %f\n", args.f);
-    printf("  d = %f\n", args.d);
-    printf("  veci[1] = %d\n", args.veci[1]);
-    printf("  s = %s\n", args.s.c_str());
-    printf("  sv = %s\n", args.sv.data());
-    
-    printf("hello = %s\n", hello ? "true" : "false");
-    printf("i = %d\n", i);
-    printf("f = %f\n", f);
-    printf("d = %f\n", d);
-    printf("s = %s\n", s.c_str());
-    printf("str_view = %s\n", str_view.data());
-    for (uint32_t i = 0; i < veci.size(); ++i) {
-        printf("  veci[%d] = %d", i, veci[i]);
-    }
-    printf("\n");
-    for (uint32_t i = 0; i < vecf.size(); ++i) {
-        printf("  vecf[%d] = %f", i, vecf[i]);
-    }
-    printf("\n");
-    for (uint32_t i = 0; i < vecd.size(); ++i) {
-        printf("  vecd[%d] = %f", i, vecd[i]);
-    }
-    printf("\n");
-
-    return 0;
-}

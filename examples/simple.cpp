@@ -11,7 +11,7 @@ struct Args {
 int main(int argc, char** argv) {
     clue::CommandLine<Args> cl("", "Print a message count times.");
 
-    cl.Add("message", &Args::message, "A message to print");
+    cl.AddPositional("message", &Args::message, "A message to print");
     cl.Add("count", &Args::count, "Number of times to print the message");
 
     auto [args, success] = cl.ParseArgs(argc, argv);

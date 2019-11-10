@@ -95,20 +95,35 @@ struct CommandLine {
     : name_(name), description_(description) {
     }
 
-    // Add a command line argument to be parsed.
+    // Add a command line option to be parsed.
     // By default, help will be generated, defaults printed, and types checked.
     // name: doesn't require a dash "-" prefix, those are added automatically by Clue.
     // valuePtr: can be any of most primitive types supported by Clue, including contiguous containers and member pointers.
     //           When generating defaults to_string is called on the value, so the pointer must remain valid
     //           as long as CommandLine is in scope.
-    // description: used when generating help. Line breaks and formatted are handled for
-    // flags: Some ParseFlags are used when parsing and generating help, like for generating default strings or not
+    // description: used when generating help. Line breaks and formatted are handled for you
+    // flags: Some ParseFlags are used when parsing and generating help, such as for generating default strings or not
     template <typename U>
     void Add(std::string_view name, U&& valuePtr, std::string_view description = "", uint64_t flags = kNone) {
         for (const auto& arg : args_) {
             Assert(name != arg.name, "Name \"%.*s\" already registered\n", static_cast<int>(name.size()), name.data());
         }
         args_.emplace_back(name, std::forward<U&&>(valuePtr), static_cast<ParseFlags>(flags), description);
+    }
+
+    // Add a command line argument to be parsed.
+    // By default, help will be generated, defaults printed, and types checked.
+    // name: doesn't require a dash "-" prefix, dashes are not expected for positional args
+    // valuePtr: can be any of most primitive types supported by Clue except bool, including contiguous containers and member pointers.
+    //           When generating defaults to_string is called on the value, so the pointer must remain valid
+    //           as long as CommandLine is in scope.
+    // description: used when generating help. Line breaks and formatted are handled for you
+    // flags: Some ParseFlags are used when parsing and generating help, such as for generating default strings or not
+    template <typename U>
+    void AddPositional(std::string_view name, U&& valuePtr, std::string_view description = "", uint64_t flags = kNone) {
+        static_assert(!std::is_same_v<std::remove_pointer_t<U>, bool>, "Positional flags don't make sense. Use AddOption for bool types instead");
+        static_assert(!std::is_same_v<std::remove_cv_t<U>, bool T::*>, "Positional flags don't make sense. Use AddOption for bool types instead");
+        positionalArgs_.emplace_back(name, std::forward<U&&>(valuePtr), static_cast<ParseFlags>(flags), description);
     }
 
     // Parse argv, matching args added with Add before ParseArgs was called
@@ -118,10 +133,10 @@ struct CommandLine {
     // Flags
     ParseResult<T> ParseArgs(const int argc, char** const argv, uint64_t flags = kNone) {
         currentFlags_ = static_cast<ParseFlags>(flags);
+        size_t currentPositionalArg = 0;
         T t;
 
-        int argIndex = 1;
-        while (argIndex < argc) {
+        for (int argIndex = 1; argIndex < argc; argIndex++) {
             std::string_view token(argv[argIndex]);
             auto tokenLen = static_cast<int>(token.size());
             
@@ -130,172 +145,206 @@ struct CommandLine {
                 std::exit(1);
             }
 
-            if (token[0] != '-' && !(flags & kSkipUnrecognized)) {
-                ReportError("Argument \"%.*s\" does not start with '-'\n", tokenLen, token.data());
-                return {t, false};
+            const Arg* argPtr = nullptr;
+            bool positionalArg = false;
+
+            if (token[0] != '-') {
+                if (currentPositionalArg < positionalArgs_.size()) {
+                    argPtr = &positionalArgs_[currentPositionalArg];
+                    currentPositionalArg++;
+                    positionalArg = true;
+                } else if (!(flags & kSkipUnrecognized)) {
+                    ReportError("Argument \"%.*s\" does not start with '-'\n", tokenLen, token.data());
+                    return {t, false};
+                }
             }
 
-            bool matchedToken = false;
-            for (auto& arg : args_) {
-                if (arg.name == token.substr(1)) {
-                    matchedToken = true;
-                    if (auto intVariant = std::get_if<IntVariant>(&arg.argument)) {
-                        auto ParseInt = [this, argc, &argv, &argIndex, &token, tokenLen]() -> ParseResult<int> {
-                            if (argIndex >= argc-1) {
-                                ReportError("\"%.*s\" expected an int value\n", tokenLen, token.data());
-                                return {0, false};
-                            }
-                            auto valueToken = std::string_view(argv[++argIndex]);
-                            auto valueTokenLen = static_cast<int>(valueToken.size());
-                            int v;
-                            auto result = std::from_chars(valueToken.data(), valueToken.data()+valueToken.size(), v);
-                            if (result.ec == std::errc::invalid_argument) {
-                                ReportError("\"%.*s\" expected a string representing an int but instead found \"%.*s\"\n", tokenLen, token.data(), valueTokenLen, valueToken.data());
-                                return {v, false};
-                            } else if (result.ec == std::errc::result_out_of_range) {
-                                ReportError("\"%.*s\" int value \"%.*s\" out of range [%d, %d]\n",
-                                    tokenLen, token.data(), valueTokenLen, valueToken.data(), std::numeric_limits<int>::min(), std::numeric_limits<int>::max());
-                                return {v, false};
-                            }
-                            return {v, true};
-                        };
-
-                        if (auto intPtr = std::get_if<int*>(intVariant)) {
-                            auto [v, success] =  ParseInt();
-                            if (!success) {
-                                return {t, false};
-                            }
-                            **intPtr = v;
-                        } else if (auto memberPtr = std::get_if<int T::*>(intVariant)) {
-                            auto [v, success] =  ParseInt();
-                            if (!success) {
-                                return {t, false};
-                            }
-                            t.*(*memberPtr) = v;
-                        } else if (auto arrayPtr = std::get_if<Array<int>>(intVariant)) {
-                            if (!ParseArray(arrayPtr, ParseInt)) {
-                                return {t, false};
-                            }
-                        } else if (auto arrayMemberVariant = std::get_if<ArrayMemberVariant<int>>(intVariant)) {
-                            if (!ParseArrayMemberVariant(t, arrayMemberVariant, ParseInt)) {
-                                return {t, false};
-                            }
-                        } else {
-                            ReportError("Unhandled int variant\n");
-                            return {t, false};
-                        }
-                    } else if (auto floatVariant = std::get_if<FloatVariant>(&arg.argument)) {
-                        auto ParseFloat = [this, argc, &argv, &argIndex, &token, tokenLen]() -> ParseResult<float> {
-                            if (argIndex >= argc-1) {
-                                ReportError("\"%.*s\" expected a float value\n", tokenLen, token.data());
-                                return {0.0f, false};
-                            }
-                            auto valueToken = std::string_view(argv[++argIndex]);
-                            auto valueTokenLen = static_cast<int>(valueToken.size());
-                            
-                            auto v = strtof(valueToken.data(), nullptr);
-                            // TODO: 0 could be from garbage strings!
-                            if (v == HUGE_VAL || v == HUGE_VALF || v == HUGE_VALL) {
-                                ReportError("\"%.*s\" float value \"%.*s\" out of range\n", tokenLen, token.data(), valueTokenLen, valueToken.data());
-                                return {v, false};
-                            }
-                            return {v, true};
-                        };
-                        auto ParseDouble = [this, argc, &argv, &argIndex, &token, tokenLen]() -> ParseResult<double> {
-                            if (argIndex >= argc-1) {
-                                ReportError("\"%.*s\" expected a double value\n", tokenLen, token.data());
-                                return {0.0, false};
-                            }
-                            auto valueToken = std::string_view(argv[++argIndex]);
-                            auto valueTokenLen = static_cast<int>(valueToken.size());
-                            
-                            auto v = strtod(valueToken.data(), nullptr);
-                            if (v == HUGE_VAL || v == HUGE_VALF || v == HUGE_VALL) {
-                                ReportError("\"%.*s\" double value \"%.*s\" out of range\n", tokenLen, token.data(), valueTokenLen, valueToken.data());
-                                return {v, false};
-                            }
-                            return {v, true};
-                        };
-                        if (auto floatPtr = std::get_if<float*>(floatVariant)) {
-                            auto [v, success] = ParseFloat();
-                            if (!success) {
-                                return {t, false};
-                            }
-                            **floatPtr = v;
-                        } else if (auto memberPtr = std::get_if<float T::*>(floatVariant)) {
-                            auto [v, success] = ParseFloat();
-                            if (!success) {
-                                return {t, false};
-                            }
-                            t.*(*memberPtr) = v;
-                        } else if (auto doublePtr = std::get_if<double*>(floatVariant)) {
-                            auto [v, success] = ParseDouble();
-                            if (!success) {
-                                return {t, false};
-                            }
-                            **doublePtr = v;
-                        } else if (auto memberPtr = std::get_if<double T::*>(floatVariant)) {
-                            auto [v, success] = ParseDouble();
-                            if (!success) {
-                                return {t, false};
-                            }
-                            t.*(*memberPtr) = v;
-                        } else if (auto arrayPtr = std::get_if<Array<float>>(floatVariant)) {
-                            if (!ParseArray(arrayPtr, ParseFloat)) {
-                                return {t, false};
-                            }
-                        } else if (auto arrayPtr = std::get_if<Array<double>>(floatVariant)) {
-                            if (!ParseArray(arrayPtr, ParseDouble)) {
-                                return {t, false};
-                            }
-                        } else if (auto arrayMemberVariant = std::get_if<ArrayMemberVariant<float>>(floatVariant)) {
-                            if (!ParseArrayMemberVariant(t, arrayMemberVariant, ParseFloat)) {
-                                return {t, false};
-                            }
-                        } else if (auto arrayMemberVariant = std::get_if<ArrayMemberVariant<double>>(floatVariant)) {
-                            if (!ParseArrayMemberVariant(t, arrayMemberVariant, ParseDouble)) {
-                                return {t, false};
-                            }
-                        } else {
-                            ReportError("Unhandled float variant\n");
-                            return {t, false};
-                        }
-                    } else if (auto boolVariant = std::get_if<BoolVariant>(&arg.argument)) {
-                        if (auto boolPtr = std::get_if<bool*>(boolVariant)) {
-                            **boolPtr = true;
-                        } else if (auto memberPtr = std::get_if<bool T::*>(boolVariant)) {
-                            t.*(*memberPtr) = true;
-                        } else {
-                            ReportError("Unhandled bool variant\n");
-                            return {t, false};
-                        }
-                    } else if (auto stringVariant = std::get_if<StringVariant>(&arg.argument)) {
-                        if (argIndex >= argc-1) {
-                            ReportError("\"%.*s\" expected a string value\n", tokenLen, token.data());
-                            return {t, false};
-                        }
-                        auto valueToken = std::string_view(argv[++argIndex]);
-
-                        if (auto stringPtr = std::get_if<std::string*>(stringVariant)) {
-                            **stringPtr = valueToken;
-                        } else if (auto memberPtr = std::get_if<std::string T::*>(stringVariant)) {
-                            t.*(*memberPtr) = valueToken;
-                        } else if (auto stringViewPtr = std::get_if<std::string_view*>(stringVariant)) {
-                            **stringViewPtr = valueToken;
-                        } else if (auto memberPtr = std::get_if<std::string_view T::*>(stringVariant)) {
-                            t.*(*memberPtr) = valueToken;
-                        } else {
-                            ReportError("Unhandled string variant\n");
-                            return {t, false};
-                        }
+            if (!argPtr) {
+                assert(!positionalArg);
+                for (auto& arg : args_) {
+                    if (arg.name == token.substr(1)) {
+                        argPtr = &arg;
+                        break;
                     }
                 }
             }
-            if (!matchedToken && !(flags & kSkipUnrecognized)) {
-                ReportError("Unrecognized argument \"%.*s\"\n", tokenLen, token.data());
-                return {t, false};
+            
+            if (!argPtr & !(flags & kSkipUnrecognized)) {
+                if (!(flags & kSkipUnrecognized)) {
+                    ReportError("Unrecognized argument \"%.*s\"\n", tokenLen, token.data());
+                    return {t, false};
+                }
+                continue;
             }
-            argIndex++;
+
+            auto arg = *argPtr;
+            auto argName= arg.name.data();
+            auto argNameLen = static_cast<int>(arg.name.size());
+
+            // If we found a token that looks like a positional arg we'll try to parse that same token as the arg type
+            // Bools don't have extra arguments so we simply don't allow their creation as positional args 
+            if (positionalArg) {
+                argIndex--;
+            }
+
+            if (auto intVariant = std::get_if<IntVariant>(&arg.argument)) {
+                auto ParseInt = [this, argc, &argv, &argIndex, &argName, argNameLen]() -> ParseResult<int> {
+                    argIndex++;
+                    if (argIndex >= argc) {
+                        ReportError("\"%.*s\" expected an int value\n", argNameLen, argName);
+                        return {0, false};
+                    }
+                    auto valueToken = std::string_view(argv[argIndex]);
+                    auto valueTokenData = valueToken.data();
+                    auto valueTokenLen = static_cast<int>(valueToken.size());
+                    int v;
+                    auto result = std::from_chars(valueTokenData, valueTokenData+valueTokenLen, v);
+                    if (result.ec == std::errc::invalid_argument) {
+                        ReportError("\"%.*s\" expected a string representing an int but instead found \"%.*s\"\n", argNameLen, argName, valueTokenLen, valueTokenData);
+                        return {v, false};
+                    } else if (result.ec == std::errc::result_out_of_range) {
+                        ReportError("\"%.*s\" int value \"%.*s\" out of range [%d, %d]\n",
+                            argNameLen, argName, valueTokenLen, valueTokenData, std::numeric_limits<int>::min(), std::numeric_limits<int>::max());
+                        return {v, false};
+                    }
+                    return {v, true};
+                };
+
+                if (auto intPtr = std::get_if<int*>(intVariant)) {
+                    auto [v, success] =  ParseInt();
+                    if (!success) {
+                        return {t, false};
+                    }
+                    **intPtr = v;
+                } else if (auto memberPtr = std::get_if<int T::*>(intVariant)) {
+                    auto [v, success] =  ParseInt();
+                    if (!success) {
+                        return {t, false};
+                    }
+                    t.*(*memberPtr) = v;
+                } else if (auto arrayPtr = std::get_if<Array<int>>(intVariant)) {
+                    if (!ParseArray(arrayPtr, ParseInt)) {
+                        return {t, false};
+                    }
+                } else if (auto arrayMemberVariant = std::get_if<ArrayMemberVariant<int>>(intVariant)) {
+                    if (!ParseArrayMemberVariant(t, arrayMemberVariant, ParseInt)) {
+                        return {t, false};
+                    }
+                } else {
+                    ReportError("Unhandled int variant\n");
+                    return {t, false};
+                }
+            } else if (auto floatVariant = std::get_if<FloatVariant>(&arg.argument)) {
+                auto ParseFloat = [this, argc, &argv, &argIndex, &argName, argNameLen]() -> ParseResult<float> {
+                    argIndex++;
+                    if (argIndex >= argc) {
+                        ReportError("\"%.*s\" expected a float value\n", argNameLen, argName);
+                        return {0.0f, false};
+                    }
+                    auto valueToken = std::string_view(argv[argIndex]);
+                    auto valueTokenData = valueToken.data();
+                    auto valueTokenLen = static_cast<int>(valueToken.size());
+                    
+                    auto v = strtof(valueTokenData, nullptr);
+                    // TODO: 0 could be from garbage strings!
+                    if (v == HUGE_VAL || v == HUGE_VALF || v == HUGE_VALL) {
+                        ReportError("\"%.*s\" float value \"%.*s\" out of range\n", argNameLen, argName, valueTokenLen, valueTokenData);
+                        return {v, false};
+                    }
+                    return {v, true};
+                };
+                auto ParseDouble = [this, argc, &argv, &argIndex, &argName, argNameLen]() -> ParseResult<double> {
+                    argIndex++;
+                    if (argIndex >= argc) {
+                        ReportError("\"%.*s\" expected a double value\n", argNameLen, argName);
+                        return {0.0, false};
+                    }
+                    auto valueToken = std::string_view(argv[argIndex]);
+                    auto valueTokenData = valueToken.data();
+                    auto valueTokenLen = static_cast<int>(valueToken.size());
+                    
+                    auto v = strtod(valueToken.data(), nullptr);
+                    if (v == HUGE_VAL || v == HUGE_VALF || v == HUGE_VALL) {
+                        ReportError("\"%.*s\" double value \"%.*s\" out of range\n", argNameLen, argName, valueTokenLen, valueTokenData);
+                        return {v, false};
+                    }
+                    return {v, true};
+                };
+                if (auto floatPtr = std::get_if<float*>(floatVariant)) {
+                    auto [v, success] = ParseFloat();
+                    if (!success) {
+                        return {t, false};
+                    }
+                    **floatPtr = v;
+                } else if (auto memberPtr = std::get_if<float T::*>(floatVariant)) {
+                    auto [v, success] = ParseFloat();
+                    if (!success) {
+                        return {t, false};
+                    }
+                    t.*(*memberPtr) = v;
+                } else if (auto doublePtr = std::get_if<double*>(floatVariant)) {
+                    auto [v, success] = ParseDouble();
+                    if (!success) {
+                        return {t, false};
+                    }
+                    **doublePtr = v;
+                } else if (auto memberPtr = std::get_if<double T::*>(floatVariant)) {
+                    auto [v, success] = ParseDouble();
+                    if (!success) {
+                        return {t, false};
+                    }
+                    t.*(*memberPtr) = v;
+                } else if (auto arrayPtr = std::get_if<Array<float>>(floatVariant)) {
+                    if (!ParseArray(arrayPtr, ParseFloat)) {
+                        return {t, false};
+                    }
+                } else if (auto arrayPtr = std::get_if<Array<double>>(floatVariant)) {
+                    if (!ParseArray(arrayPtr, ParseDouble)) {
+                        return {t, false};
+                    }
+                } else if (auto arrayMemberVariant = std::get_if<ArrayMemberVariant<float>>(floatVariant)) {
+                    if (!ParseArrayMemberVariant(t, arrayMemberVariant, ParseFloat)) {
+                        return {t, false};
+                    }
+                } else if (auto arrayMemberVariant = std::get_if<ArrayMemberVariant<double>>(floatVariant)) {
+                    if (!ParseArrayMemberVariant(t, arrayMemberVariant, ParseDouble)) {
+                        return {t, false};
+                    }
+                } else {
+                    ReportError("Unhandled float variant\n");
+                    return {t, false};
+                }
+            } else if (auto boolVariant = std::get_if<BoolVariant>(&arg.argument)) {
+                assert(!positionalArg);
+                if (auto boolPtr = std::get_if<bool*>(boolVariant)) {
+                    **boolPtr = true;
+                } else if (auto memberPtr = std::get_if<bool T::*>(boolVariant)) {
+                    t.*(*memberPtr) = true;
+                } else {
+                    ReportError("Unhandled bool variant\n");
+                    return {t, false};
+                }
+            } else if (auto stringVariant = std::get_if<StringVariant>(&arg.argument)) {
+                argIndex++;
+                if (argIndex >= argc) {
+                    ReportError("\"%.*s\" expected a string value\n", argNameLen, argName);
+                    return {t, false};
+                }
+                auto valueToken = std::string_view(argv[argIndex]);
+
+                if (auto stringPtr = std::get_if<std::string*>(stringVariant)) {
+                    **stringPtr = valueToken;
+                } else if (auto memberPtr = std::get_if<std::string T::*>(stringVariant)) {
+                    t.*(*memberPtr) = valueToken;
+                } else if (auto stringViewPtr = std::get_if<std::string_view*>(stringVariant)) {
+                    **stringViewPtr = valueToken;
+                } else if (auto memberPtr = std::get_if<std::string_view T::*>(stringVariant)) {
+                    t.*(*memberPtr) = valueToken;
+                } else {
+                    ReportError("Unhandled string variant\n");
+                    return {t, false};
+                }
+            } // end variant matching
         }
 
         return {t, true};
@@ -521,12 +570,12 @@ private:
         ParseFlags flags = kNone;
     };
 
-    template <typename A, typename ParseFunc>
-    bool ParseArray(A&& arrayPtr, ParseFunc&& parseFunc) {
+    template <typename A, typename ParseFunc, typename ...FuncArgs>
+    bool ParseArray(A&& arrayPtr, ParseFunc&& parseFunc, FuncArgs&&... args) {
         auto* curr = arrayPtr->begin;
         auto* end = arrayPtr->end;
         while (curr != end) {
-            auto [v, success] = parseFunc();
+            auto [v, success] = parseFunc(std::forward<FuncArgs&&>(args)...);
             if (!success) {
                 return false;
             }
@@ -536,13 +585,13 @@ private:
         return true;
     }
 
-    template <typename AMVP, typename ParseFunc> 
-    bool ParseArrayMemberVariant(T& t, AMVP&& arrayMemberVariantPtr, ParseFunc&& parseFunc) {
+    template <typename AMVP, typename ParseFunc, typename ...FuncArgs> 
+    bool ParseArrayMemberVariant(T& t, AMVP&& arrayMemberVariantPtr, ParseFunc&& parseFunc, FuncArgs&&... args) {
         return std::visit([&](auto& arrayMember) -> bool {
             auto* curr = (t.*arrayMember).begin();
             auto* end = (t.*arrayMember).end();
             while (curr != end) {
-                auto [v, success] = parseFunc();
+                auto [v, success] = parseFunc(std::forward<FuncArgs&&>(args)...);
                 if (!success) {
                     return false;
                 }
@@ -582,6 +631,7 @@ private:
     std::string_view name_;
     std::string_view description_;
     std::vector<Arg> args_;
+    std::vector<Arg> positionalArgs_;
     ParseFlags currentFlags_ = kNone;
 };
 

@@ -14,3 +14,7 @@ add_executable(features
 )
 target_compile_options(features PRIVATE -Wall -Werror -Wpedantic)
 
+add_executable(add
+  examples/add.cpp
+)
+target_compile_options(add PRIVATE -Wall -Werror -Wpedantic)

@@ -2,17 +2,13 @@
 #include <iostream>
 #include <clue/clue.h>
 
-struct Args {
-    float a;
-    float b;
-};
-
 int main(int argc, char** argv) {
-    clue::CommandLine<Args> cl("Add", "Add two numbers");
+    clue::CommandLine cl("Add", "Add two numbers");
 
-    cl.AddPositional("a", &Args::a);
-    cl.AddPositional("b", &Args::b);
+    int a, b;
+    cl.Positional(&a);
+    cl.Positional(&b);
 
-    auto [args, success] = cl.ParseArgs(argc, argv, clue::kRequired | clue::kNoDefault);
-    std::cout << args.a + args.b << std::endl;
+    cl.ParseArgs(argc, argv, clue::kRequired | clue::kNoDefault);
+    std::cout << a + b << std::endl;
 }

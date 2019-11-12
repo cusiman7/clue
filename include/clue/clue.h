@@ -43,8 +43,8 @@ enum ParseFlags : uint64_t {
     kNoExitOnError    = 1,  // If any error is encountered, don't exit. Normal behavior is to call exit(1) on error. If set, ParseResult{T, false} will be returned from ParseArgs on error. Used with ParseArgs only.
     kSkipUnrecognized = 2,  // Skip over unrecognized arguments. Normal behavior is to error out on first unrecognized argument. Used with ParseArgs only.
     kNoAutoHelp       = 4,  // Skip auto generating help args "-h", "-help", "--help", and "/?". Used with ParseArgs only.
-    kNoDefault        = 8,  // Skip outputting defaults. Normal behavior is to print "(Default: <defaults here>)". Can be used for an entire ParseArgs (used with auto-help) or with Add* for individual args
-    kRequired         = 16  // If arg with this flag is not provided by the user, an error will be reported. Applicable to both ParseArgs (meaning all arguments are required) and Add* (meaning only that arg is required)
+    kNoDefault        = 8,  // Skip outputting defaults. Normal behavior is to print "(Default: <defaults here>)". Can be used for an entire ParseArgs (used with auto-help) or with Optional/Positional for individual args
+    kRequired         = 16  // If arg with this flag is not provided by the user, an error will be reported. Applicable to both ParseArgs (meaning all arguments are required) and Optional/Positional (meaning only that arg is required)
 };
 
 struct StringBuilder {
@@ -52,7 +52,7 @@ struct StringBuilder {
     ~StringBuilder();
 
     void NewLine(int count = 1);
-    void AddChar(char c, int count = 1);
+    void AppendChar(char c, int count = 1);
 
     PRINTF_LIKE(2, 3)
     void AppendAtomic(const char* fmt, ...);
@@ -89,6 +89,16 @@ std::string as_string(T&& t);
 template <typename T>
 std::string to_string(T&& t);
 
+template <typename>
+struct JustMember;
+
+template <typename T, class C> 
+struct JustMember<T C::*> {
+    using type = std::remove_cv_t<std::remove_pointer_t<T>>;
+};
+template <typename T>
+using JustMemberT = typename JustMember<T>::type;
+
 template <typename T=std::monostate>
 struct CommandLine {
     CommandLine(std::string_view name = "", std::string_view description = "")
@@ -104,14 +114,14 @@ struct CommandLine {
     // description: used when generating help. Line breaks and formatted are handled for you
     // flags: Some ParseFlags are used when parsing and generating help, such as for generating default strings or not
     template <typename U>
-    void Add(std::string_view name, U&& valuePtr, std::string_view description = "", uint64_t flags = kNone) {
+    void Optional(U&& valuePtr, std::string_view name, std::string_view description = "", uint64_t flags = kNone) {
         for (const auto& arg : args_) {
             Assert(name != arg.name, "Name \"%.*s\" already registered\n", static_cast<int>(name.size()), name.data());
         }
-        args_.emplace_back(name, std::forward<U&&>(valuePtr), static_cast<ParseFlags>(flags), description);
+        args_.emplace_back(name, std::forward<U&&>(valuePtr), static_cast<ParseFlags>(flags), description, false);
     }
 
-    // Add a command line argument to be parsed.
+    // Add a positional command line argument to be parsed.
     // By default, help will be generated, defaults printed, and types checked.
     // name: doesn't require a dash "-" prefix, dashes are not expected for positional args
     // valuePtr: can be any of most primitive types supported by Clue except bool, including contiguous containers and member pointers.
@@ -120,13 +130,13 @@ struct CommandLine {
     // description: used when generating help. Line breaks and formatted are handled for you
     // flags: Some ParseFlags are used when parsing and generating help, such as for generating default strings or not
     template <typename U>
-    void AddPositional(std::string_view name, U&& valuePtr, std::string_view description = "", uint64_t flags = kNone) {
-        static_assert(!std::is_same_v<std::remove_pointer_t<U>, bool>, "Positional flags don't make sense. Use AddOption for bool types instead");
-        static_assert(!std::is_same_v<std::remove_cv_t<U>, bool T::*>, "Positional flags don't make sense. Use AddOption for bool types instead");
-        positionalArgs_.emplace_back(name, std::forward<U&&>(valuePtr), static_cast<ParseFlags>(flags), description);
+    void Positional(U&& valuePtr, std::string_view name = "", std::string_view description = "", uint64_t flags = kNone) {
+        static_assert(!std::is_same_v<std::remove_pointer_t<U>, bool>, "Positional flags don't make sense. Use Optional for bool types instead");
+        static_assert(!std::is_same_v<std::remove_cv_t<U>, bool T::*>, "Positional flags don't make sense. Use Optional for bool types instead");
+        positionalArgs_.emplace_back(name, std::forward<U&&>(valuePtr), static_cast<ParseFlags>(flags), description, true);
     }
 
-    // Parse argv, matching args added with Add before ParseArgs was called
+    // Parse argv, matching args added with Optional and Positional before ParseArgs was called
     // On success returns a ParseResult{T, true} with a newly constructed T filled in with options
     // On failure returns a ParseResult{T, false} where T holds the arguments parsed successfully until the failure
     //    Note: If there are valid arguments after the failed argument that could have been parsed into T, they will have been skipped
@@ -148,19 +158,7 @@ struct CommandLine {
             Arg* argPtr = nullptr;
             bool positionalArg = false;
 
-            if (token[0] != '-') {
-                if (currentPositionalArg < positionalArgs_.size()) {
-                    argPtr = &positionalArgs_[currentPositionalArg];
-                    currentPositionalArg++;
-                    positionalArg = true;
-                } else if (!(flags & kSkipUnrecognized)) {
-                    ReportError("Argument \"%.*s\" does not start with '-'\n", tokenLen, token.data());
-                    return {t, false};
-                }
-            }
-
-            if (!argPtr) {
-                assert(!positionalArg);
+            if (token.size() >= 1) {
                 for (auto& arg : args_) {
                     if (arg.name == token.substr(1)) {
                         argPtr = &arg;
@@ -168,13 +166,21 @@ struct CommandLine {
                     }
                 }
             }
-            
-            if (!argPtr && !(flags & kSkipUnrecognized)) {
+        
+            if (!argPtr) {
+                if (currentPositionalArg < positionalArgs_.size()) {
+                    argPtr = &positionalArgs_[currentPositionalArg];
+                    currentPositionalArg++;
+                    positionalArg = true;
+                }
+            }
+            if (!argPtr) {
                 if (!(flags & kSkipUnrecognized)) {
                     ReportError("Unrecognized argument \"%.*s\"\n", tokenLen, token.data());
                     return {t, false};
+                } else {
+                    continue;
                 }
-                continue;
             }
 
             auto& arg = *argPtr;
@@ -373,14 +379,18 @@ struct CommandLine {
         for(const auto& arg : positionalArgs_) {
             if ((currentFlags_ & kRequired || arg.flags & kRequired) && !arg.wasSet) {
                 missingSomething = true;
-                sb.AppendAtomic("    %.*s", static_cast<int>(arg.name.size()), arg.name.data());
+                sb.AppendChar(' ', 4);
+                AppendNameAndType(arg, sb, 0, currentFlags_);
+                //sb.AppendAtomic("    %.*s", static_cast<int>(arg.name.size()), arg.name.data());
                 sb.NewLine();
             }
         }
         for(const auto& arg : args_) {
             if ((currentFlags_ & kRequired || arg.flags & kRequired) && !arg.wasSet) {
                 missingSomething = true;
-                sb.AppendAtomic("    %.*s", static_cast<int>(arg.name.size()), arg.name.data());
+                sb.AppendChar(' ', 4);
+                AppendNameAndType(arg, sb, 0, currentFlags_);
+                //sb.AppendAtomic("    %.*s", static_cast<int>(arg.name.size()), arg.name.data());
                 sb.NewLine();
             }
         }
@@ -426,7 +436,7 @@ struct CommandLine {
         descriptionBuilder.AppendNatural(0, description_.data(), static_cast<int>(description_.size()));
         descriptionBuilder.NewLine(2);
 
-        auto DescribeArg = [flags, &usageBuilder, &usageIndent, &descriptionBuilder](const auto& arg, bool isPositional) {
+        auto DescribeArg = [flags, &usageBuilder, &usageIndent, &descriptionBuilder](const auto& arg) {
             StringBuilder defaultBuilder(64); // Used for building strings for default values
             auto ArrayDefault = [&defaultBuilder](auto arrayBegin, size_t size) {
                 for (size_t i = 0; i < size - 1; ++i) {
@@ -437,13 +447,13 @@ struct CommandLine {
             defaultBuilder.Clear();
 
             int descriptionIndent = 0;
-
+    
             auto argNameLen = static_cast<int>(arg.name.size());
             auto argNameData = arg.name.data();
             const char* usagePrefix = "";
             const char* usageSuffix = "";
             const char* namePrefix = "";
-            if (!isPositional) {
+            if (!arg.isPositional) {
                 namePrefix = "-";
             }            
             if (!(flags & kRequired) && !(arg.flags & kRequired)) {
@@ -577,18 +587,18 @@ struct CommandLine {
 
             if (!(flags & kNoDefault) && !(arg.flags & kNoDefault)) {
                 auto sv = defaultBuilder.GetStringView();
-                descriptionBuilder.AddChar(' ');
+                descriptionBuilder.AppendChar(' ');
                 descriptionBuilder.AppendAtomic(descriptionIndent, "(Default: %.*s)", static_cast<int>(sv.size()), sv.data());
             }
             descriptionBuilder.NewLine(2);
         };
 
         for (const auto& arg : args_) {
-            DescribeArg(arg, false);
+            DescribeArg(arg);
         }
 
         for (const auto& arg : positionalArgs_) {
-            DescribeArg(arg, true);
+            DescribeArg(arg);
         }
 
         auto sv = usageBuilder.GetStringView();
@@ -618,16 +628,16 @@ private:
 
     struct Arg {
         template <typename V>
-        Arg(std::string_view name, V* value, ParseFlags flags, std::string_view description = "") 
-            : name(name), argument(value), description(description), flags(flags) {
+        Arg(std::string_view name, V* value, ParseFlags flags, std::string_view description, bool isPositional) 
+            : name(name), argument(value), description(description), flags(flags), isPositional(isPositional) {
         }
         template <typename MemberT>
-        Arg(std::string_view name, MemberT T::* member, ParseFlags flags, std::string_view description = "") 
-            : name(name), argument(member), description(description), flags(flags) {
+        Arg(std::string_view name, MemberT T::* member, ParseFlags flags, std::string_view description, bool isPositional) 
+            : name(name), argument(member), description(description), flags(flags), isPositional(isPositional) {
         }
         template <typename U, size_t N>
-        Arg(std::string_view name, std::array<U, N>* array, ParseFlags flags, std::string_view description = "")
-            : name(name), argument(Array<U>{array->begin(), array->end()}), description(description), flags(flags) {
+        Arg(std::string_view name, std::array<U, N>* array, ParseFlags flags, std::string_view description, bool isPositional)
+            : name(name), argument(Array<U>{array->begin(), array->end()}), description(description), flags(flags), isPositional(isPositional) {
         }
 
         std::string_view name;
@@ -635,6 +645,7 @@ private:
         std::string_view description;
         ParseFlags flags = kNone;
         bool wasSet = false;
+        bool isPositional = false;
     };
 
     template <typename A, typename ParseFunc, typename ...FuncArgs>
@@ -668,6 +679,61 @@ private:
             return true;
         }, *arrayMemberVariantPtr);
     }
+
+    void AppendNameAndType(const Arg& arg, StringBuilder& stringBuilder, int indent, ParseFlags flags) {
+        auto argNameLen = static_cast<int>(arg.name.size());
+        auto argNameData = arg.name.data();
+
+        const char* usagePrefix = "";
+        const char* usageSuffix = "";
+        const char* namePrefix = "";
+        if (!arg.isPositional) {
+            namePrefix = "-";
+        }            
+        if (!(flags & kRequired) && !(arg.flags & kRequired)) {
+            usagePrefix = "["; 
+            usageSuffix = "]"; 
+        } 
+        if (auto intVariant = std::get_if<IntVariant>(&arg.argument)) {
+            if (auto arrayPtr = std::get_if<Array<int>>(intVariant)) {
+                size_t size = arrayPtr->end - arrayPtr->begin;
+                stringBuilder.AppendAtomic(indent, "%s%s%.*s <int[%zu]>%s", usagePrefix, namePrefix, argNameLen, argNameData, size, usageSuffix);
+            } else if (auto arrayMemberVariant = std::get_if<ArrayMemberVariant<int>>(intVariant)) {
+                size_t size = std::visit([](auto arrayMember) {
+                    return std::tuple_size<JustMemberT<decltype(arrayMember)>>::value;
+                }, *arrayMemberVariant);
+                stringBuilder.AppendAtomic(indent, "%s%s%.*s <int[%zu]>%s", usagePrefix, namePrefix, argNameLen, argNameData, size, usageSuffix);
+            } else { // Either int or int T::*
+                stringBuilder.AppendAtomic(indent, "%s%s%.*s <int>%s", usagePrefix, namePrefix, argNameLen, argNameData, usageSuffix);
+            }
+        } else if (auto floatVariant = std::get_if<FloatVariant>(&arg.argument)) {
+            if (auto arrayPtr = std::get_if<Array<float>>(floatVariant)) {
+                size_t size = arrayPtr->end - arrayPtr->begin;
+                stringBuilder.AppendAtomic(indent, "%s%s%.*s <float[%zu]>%s", usagePrefix, namePrefix, argNameLen, argNameData, size, usageSuffix);
+            } else if (auto arrayPtr = std::get_if<Array<double>>(floatVariant)) {
+                size_t size = arrayPtr->end - arrayPtr->begin;
+                stringBuilder.AppendAtomic(indent, "%s%s%.*s <double[%zu]>%s", usagePrefix, namePrefix, argNameLen, argNameData, size, usageSuffix);
+            } else if (auto arrayMemberVariant = std::get_if<ArrayMemberVariant<float>>(floatVariant)) {
+                size_t size = std::visit([](auto arrayMember) {
+                    return std::tuple_size<JustMemberT<decltype(arrayMember)>>::value;
+                }, *arrayMemberVariant);
+                stringBuilder.AppendAtomic(indent, "%s%s%.*s <float[%zu]>%s", usagePrefix, namePrefix, argNameLen, argNameData, size, usageSuffix);
+            } else if (auto arrayMemberVariant = std::get_if<ArrayMemberVariant<double>>(floatVariant)) {
+                size_t size = std::visit([](auto arrayMember) {
+                    return std::tuple_size<JustMemberT<decltype(arrayMember)>>::value;
+                }, *arrayMemberVariant);
+                stringBuilder.AppendAtomic(indent, "%s%s%.*s <double[%zu]>%s", usagePrefix, namePrefix, argNameLen, argNameData, size, usageSuffix);
+            } else if (std::holds_alternative<float*>(*floatVariant) || std::holds_alternative<float T::*>(*floatVariant)) {
+                stringBuilder.AppendAtomic(indent, "%s%s%.*s <float>%s", usagePrefix, namePrefix, argNameLen, argNameData, usageSuffix);
+            } else if (std::holds_alternative<double*>(*floatVariant) || std::holds_alternative<double T::*>(*floatVariant)) {
+                stringBuilder.AppendAtomic(indent, "%s%s%.*s <double>%s", usagePrefix, namePrefix, argNameLen, argNameData, usageSuffix);
+            }
+        } else if (auto stringVariantPtr = std::get_if<StringVariant>(&arg.argument)) {
+            stringBuilder.AppendAtomic(indent, "%s%s%.*s <string>%s", usagePrefix, namePrefix, argNameLen, argNameData, usageSuffix);
+        } else if (auto boolVariantPtr = std::get_if<BoolVariant>(&arg.argument)) {
+            stringBuilder.AppendAtomic(indent, "%s%s%.*s%s", usagePrefix, namePrefix, argNameLen, argNameData, usageSuffix);
+        }
+    };
 
     inline void ReportError(const char* fmt, va_list vaList) {
         vfprintf(stderr, fmt, vaList);
@@ -715,7 +781,7 @@ void StringBuilder::NewLine(int count) {
     lineLen_ = 0;
 }
 
-void StringBuilder::AddChar(char c, int count) {
+void StringBuilder::AppendChar(char c, int count) {
     AppendCharAndGrow(c, count);
 }
 
@@ -744,7 +810,7 @@ void StringBuilder::AppendAtomic(int indent, const char* fmt, ...) {
     va_end(copy);
     if (lineLen_ + len > maxLineLen_) {
         NewLine();
-        AddChar(' ', indent);
+        AppendChar(' ', indent);
     }
     AppendAndGrow(len, fmt, vaList);
     va_end(vaList);
@@ -765,7 +831,7 @@ void StringBuilder::AppendNatural(int indent, const char* str, int length) {
         if (str[cursor] == '\n') {
             AppendAndGrow("%.*s", cursor - currentLineStart + 1, &str[currentLineStart]); // no \n since the string has a newline
             lineLen_ = 0; // No NewLine() as the string had a newline
-            AddChar(' ', indent);
+            AppendChar(' ', indent);
             cursor++;
             currentLineStart = cursor;
             continue;
@@ -775,7 +841,7 @@ void StringBuilder::AppendNatural(int indent, const char* str, int length) {
         if (cursor - currentLineStart + lineLen_ > maxLineLen_) {
             AppendAndGrow("%.*s", lastBreakablePos - currentLineStart + 1, &str[currentLineStart]);
             NewLine();
-            AddChar(' ', indent);
+            AppendChar(' ', indent);
             cursor = lastBreakablePos + 1;
             currentLineStart = cursor;
             continue;

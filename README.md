@@ -53,11 +53,11 @@ Print a message count times.
 * Support for structs composed of any of the above types
 * Support for positional and optional arguments
 * Configurable 
-* * Support for allowing not exiting early on an error
-* * Support for unrecognized arguments
-* * Disabling auto-help generation
-* * Disabling defaults
-* * Marking any or all arguments as required
+  * Support for allowing not exiting early on an error
+  * Support for unrecognized arguments
+  * Disabling auto-help generation
+  * Disabling defaults
+  * Marking any or all arguments as required
 * Header only
 
 ## Roadmap

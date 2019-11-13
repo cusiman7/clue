@@ -119,7 +119,21 @@ struct CommandLine {
         for (const auto& arg : args_) {
             Assert(name != arg.name, "Name \"%.*s\" already registered\n", static_cast<int>(name.size()), name.data());
         }
-        args_.emplace_back(name, std::forward<U&&>(valuePtr), static_cast<ParseFlags>(flags), description, false);
+        args_.emplace_back(MakeArg(std::forward<U&&>(valuePtr), name, description, static_cast<ParseFlags>(flags), false));
+    }
+    template <size_t minArgs = 0, size_t maxArgs = std::numeric_limits<size_t>::max(), typename U>
+    void Optional(std::vector<U>* valuePtr, std::string_view name, std::string_view description = "", uint64_t flags = kNone) {
+        for (const auto& arg : args_) {
+            Assert(name != arg.name, "Name \"%.*s\" already registered\n", static_cast<int>(name.size()), name.data());
+        }
+        args_.emplace_back(MakeArg<minArgs, maxArgs>(valuePtr, name, description, static_cast<ParseFlags>(flags), false));
+    }
+    template <size_t minArgs = 0, size_t maxArgs = std::numeric_limits<size_t>::max(), typename U>
+    void Optional(std::vector<U> T::* valuePtr, std::string_view name, std::string_view description = "", uint64_t flags = kNone) {
+        for (const auto& arg : args_) {
+            Assert(name != arg.name, "Name \"%.*s\" already registered\n", static_cast<int>(name.size()), name.data());
+        }
+        args_.emplace_back(MakeArg<minArgs, maxArgs>(valuePtr, name, description, static_cast<ParseFlags>(flags), false));
     }
 
     // Add a positional command line argument to be parsed.
@@ -134,7 +148,7 @@ struct CommandLine {
     void Positional(U&& valuePtr, std::string_view name = "", std::string_view description = "", uint64_t flags = kNone) {
         static_assert(!std::is_same_v<std::remove_pointer_t<U>, bool>, "Positional flags don't make sense. Use Optional for bool types instead");
         static_assert(!std::is_same_v<std::remove_cv_t<U>, bool T::*>, "Positional flags don't make sense. Use Optional for bool types instead");
-        positionalArgs_.emplace_back(name, std::forward<U&&>(valuePtr), static_cast<ParseFlags>(flags), description, true);
+        positionalArgs_.emplace_back(MakeArg(std::forward<U&&>(valuePtr), name, description, static_cast<ParseFlags>(flags), true));
     }
 
     // Parse argv, matching args added with Optional and Positional before ParseArgs was called
@@ -195,10 +209,12 @@ struct CommandLine {
             }
 
             if (auto intVariant = std::get_if<IntVariant>(&arg.argument)) {
-                auto ParseInt = [this, argc, &argv, &argIndex, &argName, argNameLen]() -> ParseResult<int> {
+                auto ParseInt = [this, argc, &argv, &argIndex, &argName, argNameLen](bool reportErrors = true) -> ParseResult<int> {
                     argIndex++;
                     if (argIndex >= argc) {
-                        ReportError("\"%.*s\" expected an int value\n", argNameLen, argName);
+                        if (reportErrors) {
+                            ReportError("\"%.*s\" expected an int value\n", argNameLen, argName);
+                        }
                         return {0, false};
                     }
                     auto valueToken = std::string_view(argv[argIndex]);
@@ -207,11 +223,15 @@ struct CommandLine {
                     int v;
                     auto result = std::from_chars(valueTokenData, valueTokenData+valueTokenLen, v);
                     if (result.ec == std::errc::invalid_argument) {
-                        ReportError("\"%.*s\" expected a string representing an int but instead found \"%.*s\"\n", argNameLen, argName, valueTokenLen, valueTokenData);
+                        if (reportErrors) {
+                            ReportError("\"%.*s\" expected a string representing an int but instead found \"%.*s\"\n", argNameLen, argName, valueTokenLen, valueTokenData);
+                        }
                         return {v, false};
                     } else if (result.ec == std::errc::result_out_of_range) {
-                        ReportError("\"%.*s\" int value \"%.*s\" out of range [%d, %d]\n",
+                        if (reportErrors) {
+                            ReportError("\"%.*s\" int value \"%.*s\" out of range [%d, %d]\n",
                             argNameLen, argName, valueTokenLen, valueTokenData, std::numeric_limits<int>::min(), std::numeric_limits<int>::max());
+                        }
                         return {v, false};
                     }
                     return {v, true};
@@ -222,29 +242,48 @@ struct CommandLine {
                     if (!success) {
                         return {t, false};
                     }
-                    arg.wasSet = true;
                     **intPtr = v;
                 } else if (auto memberPtr = std::get_if<int T::*>(intVariant)) {
                     auto [v, success] =  ParseInt();
                     if (!success) {
                         return {t, false};
                     }
-                    arg.wasSet = true;
                     t.*(*memberPtr) = v;
                 } else if (auto arrayPtr = std::get_if<Array<int>>(intVariant)) {
                     if (!ParseArray(arrayPtr, ParseInt)) {
                         return {t, false};
                     }
-                    arg.wasSet = true;
                 } else if (auto arrayMemberVariant = std::get_if<ArrayMemberVariant<int>>(intVariant)) {
                     if (!ParseArrayMemberVariant(t, arrayMemberVariant, ParseInt)) {
                         return {t, false};
                     }
-                    arg.wasSet = true;
+                } else if (auto vector = std::get_if<Vector<int>>(intVariant)) {
+                    // false means don't report errors
+                    auto c = ParseVector(*vector, argc, &argIndex, ParseInt, false);
+                    if (c < vector->minArgs) {
+                        ReportError("\"%.*s\" expected at least %zu arguments but only found %zu\n", argNameLen, argName, vector->minArgs, vector->vec->size());
+                        return {t, false};
+                    }
+                    if (c > vector->maxArgs) {
+                        ReportError("\"%.*s\" expected at most %zu arguments but found %zu\n", argNameLen, argName, vector->maxArgs, vector->vec->size());
+                        return {t, false};
+                    }
+                } else if (auto vectorMember = std::get_if<VectorMember<int>>(intVariant)) {
+                    // false means don't report errors
+                    auto c = ParseMemberVector(t, *vectorMember, argc, &argIndex, ParseInt, false);
+                    if (c < vectorMember->minArgs) {
+                        ReportError("\"%.*s\" expected at least %zu arguments but only found %zu\n", argNameLen, argName, vectorMember->minArgs, (t.*(vectorMember->vec)).size());
+                        return {t, false};
+                    }
+                    if (c > vectorMember->maxArgs) {
+                        ReportError("\"%.*s\" expected at most %zu arguments but fount more\n", argNameLen, argName, vectorMember->maxArgs);
+                        return {t, false};
+                    }
                 } else {
                     ReportError("Unhandled int variant\n");
                     return {t, false};
                 }
+                arg.wasSet = true;
             } else if (auto floatVariant = std::get_if<FloatVariant>(&arg.argument)) {
                 auto ParseFloat = [this, argc, &argv, &argIndex, &argName, argNameLen]() -> ParseResult<float> {
                     argIndex++;
@@ -440,6 +479,7 @@ struct CommandLine {
         auto DescribeArg = [flags, &usageBuilder, &usageIndent, &descriptionBuilder](const auto& arg) {
             StringBuilder defaultBuilder(64); // Used for building strings for default values
             auto ArrayDefault = [&defaultBuilder](auto arrayBegin, size_t size) {
+                if (size == 0) return;
                 for (size_t i = 0; i < size - 1; ++i) {
                     defaultBuilder.AppendAtomic("%s ", to_string(arrayBegin[i]).c_str());
                 }
@@ -481,6 +521,35 @@ struct CommandLine {
 
                     descriptionIndent = FormattedLength("    %s%.*s <int[%zu]>", namePrefix, argNameLen, argNameData, size);
                     descriptionBuilder.AppendAtomic(0, "    %s%.*s <int[%zu]>", namePrefix, argNameLen, argNameData, size);
+                } else if (std::holds_alternative<Vector<int>>(*intVariant) || std::holds_alternative<VectorMember<int>>(*intVariant)) {
+                    size_t minArgs = 0;
+                    size_t maxArgs = std::numeric_limits<size_t>::max();
+                    if (auto vector = std::get_if<Vector<int>>(intVariant)) {
+                        ArrayDefault(vector->vec->begin(), vector->vec->size());
+                        minArgs = vector->minArgs;
+                        maxArgs = vector->maxArgs; 
+                    } else if (auto vector = std::get_if<VectorMember<int>>(intVariant)) {
+                        ArrayDefault((t.*(vector->vec)).begin(), (t.*(vector->vec)).size());
+                        minArgs = vector->minArgs;
+                        maxArgs = vector->maxArgs;
+                    }
+                    if (minArgs != 0 && maxArgs != std::numeric_limits<size_t>::max()) {
+                        usageBuilder.AppendAtomic(usageIndent, " %s%s%.*s <int[%zu:%zu]>%s", usagePrefix, namePrefix, argNameLen, argNameData, minArgs, maxArgs, usageSuffix);
+                        descriptionIndent = FormattedLength("    %s%.*s <int[%zu:%zu]>", namePrefix, argNameLen, argNameData, minArgs, maxArgs);
+                        descriptionBuilder.AppendAtomic(0, "    %s%.*s <int[%zu:%zu]>", namePrefix, argNameLen, argNameData, minArgs, maxArgs);
+                    } else if (minArgs != 0 && maxArgs == std::numeric_limits<size_t>::max()) {
+                        usageBuilder.AppendAtomic(usageIndent, " %s%s%.*s <int[%zu:]>%s", usagePrefix, namePrefix, argNameLen, argNameData, minArgs, usageSuffix);
+                        descriptionIndent = FormattedLength("    %s%.*s <int[%zu:]>", namePrefix, argNameLen, argNameData, minArgs);
+                        descriptionBuilder.AppendAtomic(0, "    %s%.*s <int[%zu:]>", namePrefix, argNameLen, argNameData, minArgs);
+                    } else if (minArgs == 0 && maxArgs != std::numeric_limits<size_t>::max()) {
+                        usageBuilder.AppendAtomic(usageIndent, " %s%s%.*s <int[:%zu]>%s", usagePrefix, namePrefix, argNameLen, argNameData, maxArgs, usageSuffix);
+                        descriptionIndent = FormattedLength("    %s%.*s <int[:%zu]>", namePrefix, argNameLen, argNameData, maxArgs);
+                        descriptionBuilder.AppendAtomic(0, "    %s%.*s <int[:%zu]>", namePrefix, argNameLen, argNameData, maxArgs);
+                    } else {
+                        usageBuilder.AppendAtomic(usageIndent, " %s%s%.*s <int[...]>%s", usagePrefix, namePrefix, argNameLen, argNameData, usageSuffix);
+                        descriptionIndent = FormattedLength("    %s%.*s <int[...]>", namePrefix, argNameLen, argNameData);
+                        descriptionBuilder.AppendAtomic(0, "    %s%.*s <int[...]>", namePrefix, argNameLen, argNameData);
+                    }
                 } else { // Either int or int T::*
                     usageBuilder.AppendAtomic(usageIndent, " %s%s%.*s <int>%s", usagePrefix, namePrefix, argNameLen, argNameData, usageSuffix);
 
@@ -616,38 +685,58 @@ private:
         U* begin;
         U* end;
     };
+    template <typename U>
+    struct Vector {
+        std::vector<U>* vec;
+        const size_t minArgs;
+        const size_t maxArgs;
+    };
+    template <typename U>
+    struct VectorMember{
+        std::vector<U> T::* vec;
+        const size_t minArgs;
+        const size_t maxArgs;
+    };
 
     template <typename U>
     using ArrayMemberVariant = std::variant<std::array<U, 1> T::*, std::array<U, 2> T::*, std::array<U, 3> T::*, std::array<U, 4> T::*, std::array<U, 5> T::*,
          std::array<U, 6> T::*, std::array<U, 7> T::*, std::array<U, 8> T::*, std::array<U, 9> T::*, std::array<U, 10> T::*>;
-    using IntVariant = std::variant<int*, int T::*, Array<int>, ArrayMemberVariant<int>>;
+    using IntVariant = std::variant<int*, int T::*, Array<int>, ArrayMemberVariant<int>, Vector<int>, VectorMember<int>>;
     using FloatVariant = std::variant<float*, float T::*, double*, double T::*, Array<float>, Array<double>, ArrayMemberVariant<float>, ArrayMemberVariant<double>>;
     using BoolVariant = std::variant<bool*, bool T::*>;
     using StringVariant = std::variant<std::string_view*, std::string_view T::*, std::string*, std::string T::*>;
 
     using ArgumentVariant = std::variant<IntVariant, FloatVariant, BoolVariant, StringVariant>;
-
+    
     struct Arg {
-        template <typename V>
-        Arg(std::string_view name, V* value, ParseFlags flags, std::string_view description, bool isPositional) 
-            : name(name), argument(value), description(description), flags(flags), isPositional(isPositional) {
-        }
-        template <typename MemberT>
-        Arg(std::string_view name, MemberT T::* member, ParseFlags flags, std::string_view description, bool isPositional) 
-            : name(name), argument(member), description(description), flags(flags), isPositional(isPositional) {
-        }
-        template <typename U, size_t N>
-        Arg(std::string_view name, std::array<U, N>* array, ParseFlags flags, std::string_view description, bool isPositional)
-            : name(name), argument(Array<U>{array->begin(), array->end()}), description(description), flags(flags), isPositional(isPositional) {
-        }
-
-        std::string_view name;
         ArgumentVariant argument;
+        std::string_view name;
         std::string_view description;
         ParseFlags flags = kNone;
         bool wasSet = false;
         bool isPositional = false;
     };
+
+    template <typename V>
+    Arg MakeArg(V* value, std::string_view name, std::string_view description, ParseFlags flags, bool isPositional) {
+        return Arg{value, name, description, flags, isPositional};
+    }
+    template <typename MemberT>
+    Arg MakeArg(MemberT T::* member, std::string_view name, std::string_view description, ParseFlags flags, bool isPositional) {
+        return Arg{member, name, description, flags, isPositional};
+    }
+    template <typename U, size_t N>
+    Arg MakeArg(std::array<U, N>* array, std::string_view name, std::string_view description, ParseFlags flags, bool isPositional) {
+        return Arg{Array<U>{array->begin(), array->end()}, name, description, flags, isPositional};
+    }
+    template <size_t MinArgs, size_t MaxArgs, typename U>
+    Arg MakeArg(std::vector<U>* vector, std::string_view name, std::string_view description, ParseFlags flags, bool isPositional) {
+        return Arg{Vector<U>{vector, MinArgs, MaxArgs}, name, description, flags, isPositional};
+    }
+    template <size_t MinArgs, size_t MaxArgs, typename U>
+    Arg MakeArg(std::vector<U> T::* vector, std::string_view name, std::string_view description, ParseFlags flags, bool isPositional) {
+        return Arg{VectorMember<U>{vector, MinArgs, MaxArgs}, name, description, flags, isPositional};
+    }
 
     template <typename A, typename ParseFunc, typename ...FuncArgs>
     bool ParseArray(A&& arrayPtr, ParseFunc&& parseFunc, FuncArgs&&... args) {
@@ -680,6 +769,38 @@ private:
             return true;
         }, *arrayMemberVariantPtr);
     }
+    
+    template <typename U, typename ParseFunc, typename ...FuncArgs>
+    size_t ParseVector(Vector<U> vector, int argc, int* argIndex, ParseFunc&& parseFunc, FuncArgs&&... args) {
+        // For vectors we just consume until we can no longer consume any more
+        vector.vec->clear();
+        size_t i = 0;
+        for (; *argIndex <= argc; ++i) {
+            auto [v, success] = parseFunc(std::forward<FuncArgs&&>(args)...);
+            if (!success) {
+                *argIndex -= 1;
+                break;
+            }
+            vector.vec->push_back(v);
+        }
+        return i;
+    }
+    
+    template <typename U, typename ParseFunc, typename ...FuncArgs>
+    size_t ParseMemberVector(T& t, VectorMember<U> vector, int argc, int* argIndex, ParseFunc&& parseFunc, FuncArgs&&... args) {
+        // For vectors we just consume until we can no longer consume any more
+        (t.*(vector.vec)).clear();
+        size_t i = 0;
+        for (; *argIndex <= argc; ++i) {
+            auto [v, success] = parseFunc(std::forward<FuncArgs&&>(args)...);
+            if (!success) {
+                *argIndex -= 1;
+                break;
+            }
+            (t.*(vector.vec)).push_back(v);
+        }
+        return i;
+    }
 
     void AppendNameAndType(const Arg& arg, StringBuilder& stringBuilder, int indent, ParseFlags flags) {
         auto argNameLen = static_cast<int>(arg.name.size());
@@ -704,6 +825,25 @@ private:
                     return std::tuple_size<JustMemberT<decltype(arrayMember)>>::value;
                 }, *arrayMemberVariant);
                 stringBuilder.AppendAtomic(indent, "%s%s%.*s <int[%zu]>%s", usagePrefix, namePrefix, argNameLen, argNameData, size, usageSuffix);
+            } else if (std::holds_alternative<Vector<int>>(*intVariant) || std::holds_alternative<VectorMember<int>>(*intVariant)) {
+                size_t minArgs = 0;
+                size_t maxArgs = std::numeric_limits<size_t>::max();
+                if (auto vector = std::get_if<Vector<int>>(intVariant)) {
+                    minArgs = vector->minArgs;
+                    maxArgs = vector->maxArgs; 
+                } else if (auto vector = std::get_if<VectorMember<int>>(intVariant)) {
+                    minArgs = vector->minArgs;
+                    maxArgs = vector->maxArgs;
+                }
+                if (minArgs != 0 && maxArgs != std::numeric_limits<size_t>::max()) {
+                    stringBuilder.AppendAtomic(indent, "%s%s%.*s <int[%zu:%zu]>%s", usagePrefix, namePrefix, argNameLen, argNameData, minArgs, maxArgs, usageSuffix);
+                } else if (minArgs != 0 && maxArgs == std::numeric_limits<size_t>::max()) {
+                    stringBuilder.AppendAtomic(indent, "%s%s%.*s <int[%zu:]>%s", usagePrefix, namePrefix, argNameLen, argNameData, minArgs, usageSuffix);
+                } else if (minArgs == 0 && maxArgs != std::numeric_limits<size_t>::max()) {
+                    stringBuilder.AppendAtomic(indent, "%s%s%.*s <int[:%zu]>%s", usagePrefix, namePrefix, argNameLen, argNameData, maxArgs, usageSuffix);
+                } else {
+                    stringBuilder.AppendAtomic(indent, "%s%s%.*s <int[...]>%s", usagePrefix, namePrefix, argNameLen, argNameData, usageSuffix);
+                }
             } else { // Either int or int T::*
                 stringBuilder.AppendAtomic(indent, "%s%s%.*s <int>%s", usagePrefix, namePrefix, argNameLen, argNameData, usageSuffix);
             }

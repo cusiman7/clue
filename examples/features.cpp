@@ -10,6 +10,7 @@ struct Args {
     std::array<int, 3> veci = {1, 2, 3};
     std::array<float, 3> vecf = {1, 2, 3};
     std::array<double, 4> quat = {0, 0, 0, 1};
+    std::vector<int> numbers;
 };
 
 int main(int argc, char** argv) {
@@ -22,6 +23,7 @@ int main(int argc, char** argv) {
     std::array<float, 3> vecf = {0, 0, 0};
     std::array<double, 3> vecd = {0, 0, 0};
     std::string_view str_view;
+    std::vector<int> numbers;
 
     clue::CommandLine<Args> cl("Features", "This is a test program for testing command line parsing and all the different ways one might want to parse things.\n\n"
                          "Our tenets for CommandLine are:\n"
@@ -37,16 +39,18 @@ int main(int argc, char** argv) {
     cl.Optional(&Args::d, "double", "A double");
     cl.Optional(&Args::s, "name", "A name");
     cl.Optional(&Args::sv, "name_view", "Also a name");
-    cl.Optional(&veci, "raw_veci", "A \"raw veci\"");
+    cl.Optional(&Args::numbers, "numbers", "A bunch of numbers");
 
     cl.Optional(&hello, "raw_no_hello", "Another way of saying hello, but to a bool, not a member");
     cl.Optional(&i, "raw_int", "Another way of passing an integer, also not a member");
     cl.Optional(&f, "raw_float", "Floats that are raw");
     cl.Optional(&d, "raw_double", "Double");
     cl.Optional(&s, "raw_string", "A string value");
+    cl.Optional(&veci, "raw_veci", "A \"raw veci\"");
     cl.Optional(&vecf, "raw_vecf", "A 3 float vector");
     cl.Optional(&vecd, "raw_vecd", "A 3 double vector");
     cl.Optional(&str_view, "raw_strview", "Another string view to finish it all off");
+    cl.Optional(&numbers, "raw_numbers", "A bunch of numbers");
 
     auto [args, success] = cl.ParseArgs(argc, argv);
     if (!success) {
@@ -60,6 +64,12 @@ int main(int argc, char** argv) {
     printf("  veci[1] = %d\n", args.veci[1]);
     printf("  s = %s\n", args.s.c_str());
     printf("  sv = %s\n", args.sv.data());
+    printf("  numbers=[");  
+    for (size_t i = 0; i < args.numbers.size(); ++i) {
+        const char* fmt = (i == args.numbers.size() - 1) ? "%d" : "%d,";
+        printf(fmt, args.numbers[i]);
+    }
+    printf("]\n");
     
     printf("hello = %s\n", hello ? "true" : "false");
     printf("i = %d\n", i);
@@ -79,6 +89,13 @@ int main(int argc, char** argv) {
         printf("  vecd[%d] = %f", i, vecd[i]);
     }
     printf("\n");
+
+    printf("raw_numbers=[");  
+    for (size_t i = 0; i < numbers.size(); ++i) {
+        const char* fmt = (i == numbers.size() - 1) ? "%d" : "%d,";
+        printf(fmt, numbers[i]);
+    }
+    printf("]\n");
 
     return 0;
 }

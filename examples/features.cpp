@@ -1,7 +1,7 @@
 #include <clue/clue.h>
 
 struct Args {
-    bool hello = false;
+    bool hello = true;
     int i = 0;
     float f = 0;
     double d = 0;
@@ -13,7 +13,7 @@ struct Args {
 };
 
 int main(int argc, char** argv) {
-    bool hello = false;
+    bool hello = true;
     int i = 0;
     float f = 0;
     double d = 0;
@@ -28,7 +28,7 @@ int main(int argc, char** argv) {
                          "    1. Great for the command line user\n"
                          "    2. Great for the command line programmer\n"
                          "    3. Understandable for us to program and maintain");
-    cl.Optional(&Args::hello, "hello", "say hello");
+    cl.Optional(&Args::hello, "no_hello", "say hello");
     cl.Optional(&Args::veci, "veci", "3 int point");
     cl.Optional(&Args::vecf, "vecf", "3 float point");
     cl.Optional(&Args::quat, "quat", "A quaternion");
@@ -39,7 +39,7 @@ int main(int argc, char** argv) {
     cl.Optional(&Args::sv, "name_view", "Also a name");
     cl.Optional(&veci, "raw_veci", "A \"raw veci\"");
 
-    cl.Optional(&hello, "raw_hello", "Another way of saying hello, but to a bool, not a member");
+    cl.Optional(&hello, "raw_no_hello", "Another way of saying hello, but to a bool, not a member");
     cl.Optional(&i, "raw_int", "Another way of passing an integer, also not a member");
     cl.Optional(&f, "raw_float", "Floats that are raw");
     cl.Optional(&d, "raw_double", "Double");

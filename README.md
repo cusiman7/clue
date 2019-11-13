@@ -61,7 +61,7 @@ Print a message count times.
 * Header only
 
 ## Roadmap
-* vector<type>
+* vector\<type\>
 * Enum for "choices" (from\_string helper required though?)
 * Custom "user" types for the programmer
 * Windows support

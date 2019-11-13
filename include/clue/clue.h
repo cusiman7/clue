@@ -23,6 +23,7 @@
 // Enum for "choices" (from_string helper required though?)
 // custom "user" types for the programmer
 // Windows support
+// Better support for aliases and short options 
 
 #if defined(__GNUC__) || defined(__clang)
 #define PRINTF_LIKE(a, b) __attribute__((format(printf, (a), (b))))
@@ -336,10 +337,10 @@ struct CommandLine {
                 assert(!positionalArg);
                 if (auto boolPtr = std::get_if<bool*>(boolVariant)) {
                     arg.wasSet = true;
-                    **boolPtr = true;
+                    **boolPtr = !**boolPtr;
                 } else if (auto memberPtr = std::get_if<bool T::*>(boolVariant)) {
                     arg.wasSet = true;
-                    t.*(*memberPtr) = true;
+                    t.*(*memberPtr) = !(t.*(*memberPtr));
                 } else {
                     ReportError("Unhandled bool variant\n");
                     return {t, false};

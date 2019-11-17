@@ -17,10 +17,10 @@ int main(int argc, char** argv) {
     cl.Optional(&Args::count, "count", "Number of times to print the message");
     cl.Positional(&Args::message, "message", "A message to print");
 
-    auto [args, success] = cl.ParseArgs(argc, argv);
+    auto args = cl.ParseArgs(argc, argv);
 
-    for (int i = 0; i < args.count; ++i) {
-        std::cout << args.message << "\n";
+    for (int i = 0; i < args->count; ++i) {
+        std::cout << args->message << "\n";
     }
 }
 ``` 
@@ -47,9 +47,9 @@ Print a message count times.
 * Detailed program "usage" string generation based on names, descriptions, types, and default values of arguments
 * Help output formatted to sensible line lengths for humans to read
 * Expressive type-aware error messages for your users
-* Support for the primitive types: `int`, `float`, `double` and `bool`
-* Strong support for the `std::array<T>` container of any of the above primitive types (except bool)
-* Support for `std::string` and `std::string_view` out of the box as well
+* Support for the data types: `int`, `float`, `double`, `bool`, `string`, and `string_view`
+* Strong support for the `std::array<T, N>` container of any of the above primitive types (except bool)
+* Strong support for the `std::vector<T>` container of any of the above primitive types (except bool)
 * Support for structs composed of any of the above types
 * Support for positional and optional arguments
 * Configurable 
@@ -61,8 +61,10 @@ Print a message count times.
 * Header only
 
 ## Roadmap
-* vector\<type\>
 * Enum for "choices" (from\_string helper required though?)
 * Custom "user" types for the programmer
 * Windows support
+* Better support for aliases and short options 
+* Europe friendliness 10,12456
+* Large number friendliness 1,000,000.12
 

@@ -43,7 +43,7 @@ SOFTWARE.
 // custom "user" types for the programmer
 // Windows support
 // Better support for aliases and short options 
-// Europe friendliness 10,124
+// Europe friendliness 10,12456
 // Large number friendliness 1,000,000.12
 
 #if defined(__GNUC__) || defined(__clang)

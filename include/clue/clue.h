@@ -127,6 +127,8 @@ struct DataType<T C::*> {
 template <typename T>
 using DataTypeT = typename DataType<T>::type;
 
+template<class T> struct AlwaysFalse : std::false_type {};
+
 template <typename T=std::monostate>
 struct CommandLine {
     CommandLine(std::string_view name = "", std::string_view description = "")
@@ -442,146 +444,12 @@ struct CommandLine {
         descriptionBuilder.AppendNatural(0, description_.data(), static_cast<int>(description_.size()));
         descriptionBuilder.NewLine(2);
 
-        auto DescribeArg = [flags, &usageBuilder, &usageIndent, &descriptionBuilder](const auto& arg) {
-            StringBuilder defaultBuilder(64); // Used for building strings for default values
-            auto ArrayDefault = [&defaultBuilder](auto arrayBegin, size_t size) {
-                if (size == 0) return;
-                for (size_t i = 0; i < size - 1; ++i) {
-                    defaultBuilder.AppendAtomic("%s ", to_string(arrayBegin[i]).c_str());
-                }
-                defaultBuilder.AppendAtomic("%s", to_string(arrayBegin[size-1]).c_str());
-            };
-            defaultBuilder.Clear();
-
-            int descriptionIndent = 0;
-    
-            auto argNameLen = static_cast<int>(arg.name.size());
-            auto argNameData = arg.name.data();
-            const char* usagePrefix = "";
-            const char* usageSuffix = "";
-            const char* namePrefix = "";
-            if (!arg.isPositional) {
-                namePrefix = "-";
-            }            
-            if (!(flags & kRequired) && !(arg.flags & kRequired)) {
-                usagePrefix = "["; 
-                usageSuffix = "]"; 
-            } 
-
-            if (auto intVariant = std::get_if<IntVariant>(&arg.argument)) {
-                if (auto arrayPtr = std::get_if<ArrayPointer<int>>(intVariant)) {
-                    size_t size = arrayPtr->Size();
-                    usageBuilder.AppendAtomic(usageIndent, " %s%s%.*s <int[%zu]>%s", usagePrefix, namePrefix, argNameLen, argNameData, size, usageSuffix);
-
-                    descriptionIndent = FormattedLength("    %s%.*s <int[%zu]>", namePrefix, argNameLen, argNameData, size);
-                    descriptionBuilder.AppendAtomic(0, "    %s%.*s <int[%zu]>", namePrefix, argNameLen, argNameData, size);
-                    
-                    ArrayDefault(arrayPtr->Begin(t), size);
-                } else if (auto vectorPtr = std::get_if<VectorPointer<int>>(intVariant)) {
-                    size_t minArgs = vectorPtr->minArgs;
-                    size_t maxArgs = vectorPtr->maxArgs;
-                    ArrayDefault(vectorPtr->Get(t).begin(), vectorPtr->Get(t).size());
-                    if (minArgs != 0 && maxArgs != std::numeric_limits<size_t>::max()) {
-                        usageBuilder.AppendAtomic(usageIndent, " %s%s%.*s <int[%zu:%zu]>%s", usagePrefix, namePrefix, argNameLen, argNameData, minArgs, maxArgs, usageSuffix);
-                        descriptionIndent = FormattedLength("    %s%.*s <int[%zu:%zu]>", namePrefix, argNameLen, argNameData, minArgs, maxArgs);
-                        descriptionBuilder.AppendAtomic(0, "    %s%.*s <int[%zu:%zu]>", namePrefix, argNameLen, argNameData, minArgs, maxArgs);
-                    } else if (minArgs != 0 && maxArgs == std::numeric_limits<size_t>::max()) {
-                        usageBuilder.AppendAtomic(usageIndent, " %s%s%.*s <int[%zu:]>%s", usagePrefix, namePrefix, argNameLen, argNameData, minArgs, usageSuffix);
-                        descriptionIndent = FormattedLength("    %s%.*s <int[%zu:]>", namePrefix, argNameLen, argNameData, minArgs);
-                        descriptionBuilder.AppendAtomic(0, "    %s%.*s <int[%zu:]>", namePrefix, argNameLen, argNameData, minArgs);
-                    } else if (minArgs == 0 && maxArgs != std::numeric_limits<size_t>::max()) {
-                        usageBuilder.AppendAtomic(usageIndent, " %s%s%.*s <int[:%zu]>%s", usagePrefix, namePrefix, argNameLen, argNameData, maxArgs, usageSuffix);
-                        descriptionIndent = FormattedLength("    %s%.*s <int[:%zu]>", namePrefix, argNameLen, argNameData, maxArgs);
-                        descriptionBuilder.AppendAtomic(0, "    %s%.*s <int[:%zu]>", namePrefix, argNameLen, argNameData, maxArgs);
-                    } else {
-                        usageBuilder.AppendAtomic(usageIndent, " %s%s%.*s <int[...]>%s", usagePrefix, namePrefix, argNameLen, argNameData, usageSuffix);
-                        descriptionIndent = FormattedLength("    %s%.*s <int[...]>", namePrefix, argNameLen, argNameData);
-                        descriptionBuilder.AppendAtomic(0, "    %s%.*s <int[...]>", namePrefix, argNameLen, argNameData);
-                    }
-                } else { // Either int or int T::*
-                    usageBuilder.AppendAtomic(usageIndent, " %s%s%.*s <int>%s", usagePrefix, namePrefix, argNameLen, argNameData, usageSuffix);
-
-                    descriptionIndent = FormattedLength("    %s%.*s <int>", namePrefix, argNameLen, argNameData);
-                    descriptionBuilder.AppendAtomic(0, "    %s%.*s <int>", namePrefix, argNameLen, argNameData);
-
-                    if (auto intPtr = std::get_if<DataPointer<int>>(intVariant)) {
-                        defaultBuilder.AppendAtomic("%s", to_string(intPtr->Get(t)).c_str());
-                    }
-                }
-            } else if (auto floatVariant = std::get_if<FloatVariant>(&arg.argument)) {
-                if (auto arrayPtr = std::get_if<ArrayPointer<float>>(floatVariant)) {
-                    size_t size = arrayPtr->Size();
-                    usageBuilder.AppendAtomic(usageIndent, " %s%s%.*s <float[%zu]>%s", usagePrefix, namePrefix, argNameLen, argNameData, size, usageSuffix);
-
-                    descriptionIndent = FormattedLength("   %s%.*s <float[%zu]>", namePrefix, argNameLen, argNameData, size);
-                    descriptionBuilder.AppendAtomic(0, "    %s%.*s <float[%zu]>", namePrefix, argNameLen, argNameData, size);
-                    ArrayDefault(arrayPtr->Begin(t), size);
-                } else if (auto arrayPtr = std::get_if<ArrayPointer<double>>(floatVariant)) {
-                    size_t size = arrayPtr->Size();
-                    usageBuilder.AppendAtomic(usageIndent, " %s%s%.*s <double[%zu]>%s", usagePrefix, namePrefix, argNameLen, argNameData, size, usageSuffix);
-                    
-                    descriptionIndent = FormattedLength("    %s%.*s <double[%zu]>", namePrefix, argNameLen, argNameData, size);
-                    descriptionBuilder.AppendAtomic(0, "    %s%.*s <double[%zu]>", namePrefix, argNameLen, argNameData, size);
-                    ArrayDefault(arrayPtr->Begin(t), size);
-                } else if (auto floatPtr = std::get_if<DataPointer<float>>(floatVariant)) {
-                    usageBuilder.AppendAtomic(usageIndent, " %s%s%.*s <float>%s", usagePrefix, namePrefix, argNameLen, argNameData, usageSuffix);
-                    
-                    descriptionIndent = FormattedLength("    %s%.*s <float>", namePrefix, argNameLen, argNameData);
-                    descriptionBuilder.AppendAtomic(0, "    %s%.*s <float>", namePrefix, argNameLen, argNameData);
-
-                    defaultBuilder.AppendAtomic("%s", to_string(floatPtr->Get(t)).c_str());
-                } else if (auto doublePtr = std::get_if<DataPointer<double>>(floatVariant)) {
-                    usageBuilder.AppendAtomic(usageIndent, " %s%s%.*s <double>%s", usagePrefix, namePrefix, argNameLen, argNameData, usageSuffix);
-                    
-                    descriptionIndent = FormattedLength("    %s%.*s <double>", namePrefix, argNameLen, argNameData);
-                    descriptionBuilder.AppendAtomic(0, "    %s%.*s <double>", namePrefix, argNameLen, argNameData);
-                    
-                    defaultBuilder.AppendAtomic("%s", to_string(doublePtr->Get(t)).c_str());
-                }
-            } else if (auto stringVariantPtr = std::get_if<StringVariant>(&arg.argument)) {
-                usageBuilder.AppendAtomic(usageIndent, " %s%s%.*s <string>%s", usagePrefix, namePrefix, argNameLen, argNameData, usageSuffix);
-                
-                descriptionIndent = FormattedLength("    %s%.*s <string>", namePrefix, argNameLen, argNameData);
-                descriptionBuilder.AppendAtomic(0, "    %s%.*s <string>", namePrefix, argNameLen, argNameData);
-
-                if (auto stringPtr = std::get_if<DataPointer<std::string>>(stringVariantPtr)) {
-                    defaultBuilder.AppendAtomic("%s", stringPtr->Get(t).c_str());
-                } else if (auto stringViewPtr = std::get_if<DataPointer<std::string_view>>(stringVariantPtr)) {
-                    auto sv = stringViewPtr->Get(t);
-                    defaultBuilder.AppendAtomic("%.*s", static_cast<int>(sv.size()), sv.data());
-                }
-            } else if (auto boolVariantPtr = std::get_if<BoolVariant>(&arg.argument)) {
-                usageBuilder.AppendAtomic(usageIndent, " %s%s%.*s%s", usagePrefix, namePrefix, argNameLen, argNameData, usageSuffix);
-                
-                descriptionIndent = FormattedLength("    %s%.*s", namePrefix, argNameLen, argNameData);
-                descriptionBuilder.AppendAtomic(0, "    %s%.*s", namePrefix, argNameLen, argNameData);
-                if (auto boolPtr = std::get_if<DataPointer<bool>>(boolVariantPtr)) {
-                    defaultBuilder.AppendAtomic("%s", boolPtr->Get(t) ? "true" : "false");
-                }
-            }
-                    
-            // Append every argument's description
-            if ((flags & kRequired) || (arg.flags & kRequired)) {
-                descriptionBuilder.AppendAtomic(descriptionIndent, " (Required): ");
-            } else {
-                descriptionBuilder.AppendAtomic(": ");
-            }
-            descriptionBuilder.AppendNatural(descriptionIndent, arg.description.data(), arg.description.size());
-
-            if (!(flags & kNoDefault) && !(arg.flags & kNoDefault)) {
-                auto sv = defaultBuilder.GetStringView();
-                descriptionBuilder.AppendChar(' ');
-                descriptionBuilder.AppendAtomic(descriptionIndent, "(Default: %.*s)", static_cast<int>(sv.size()), sv.data());
-            }
-            descriptionBuilder.NewLine(2);
-        };
-
         for (const auto& arg : args_) {
-            DescribeArg(arg);
+            DescribeArg(arg, t, usageIndent, usageBuilder, descriptionBuilder, flags);
         }
 
         for (const auto& arg : positionalArgs_) {
-            DescribeArg(arg);
+            DescribeArg(arg, t, usageIndent, usageBuilder, descriptionBuilder, flags);
         }
 
         auto sv = usageBuilder.GetStringView();
@@ -668,7 +536,10 @@ private:
     using BoolVariant = std::variant<DataPointer<bool>>;
     using StringVariant = std::variant<DataPointer<std::string_view>, DataPointer<std::string>>;
 
-    using ArgumentVariant = std::variant<IntVariant, FloatVariant, BoolVariant, StringVariant>;
+    using ArgumentVariant = std::variant<DataPointer<int>, ArrayPointer<int>, VectorPointer<int>,
+        DataPointer<float>, DataPointer<double>, ArrayPointer<float>, ArrayPointer<double>,
+        DataPointer<bool>,
+        DataPointer<std::string_view>, DataPointer<std::string>>;
     
     struct Arg {
         ArgumentVariant argument;
@@ -729,60 +600,151 @@ private:
     }
 
     void AppendNameAndType(const Arg& arg, StringBuilder& stringBuilder, int indent, ParseFlags flags) {
-        auto argNameLen = static_cast<int>(arg.name.size());
-        auto argNameData = arg.name.data();
+        std::visit([&](auto&& a) { 
+            using ValueType = typename std::remove_reference_t<decltype(a)>::value_type;
+            using ContainerType = typename std::remove_reference_t<decltype(a)>::container_type;
 
-        const char* usagePrefix = "";
-        const char* usageSuffix = "";
-        const char* namePrefix = "";
+            auto argNameLen = static_cast<int>(arg.name.size());
+            auto argNameData = arg.name.data();
 
-        if (!arg.isPositional) {
-            namePrefix = "-";
-        }            
-        if (!(flags & kRequired) && !(arg.flags & kRequired)) {
-            usagePrefix = "["; 
-            usageSuffix = "]"; 
-        } 
+            const char* usagePrefix = "";
+            const char* usageSuffix = "";
+            const char* namePrefix = "";
 
-
-        if (auto intVariant = std::get_if<IntVariant>(&arg.argument)) {
-            const char* typeString = std::visit([](auto&& a) { return TypeInfo<decltype(a)>::String(); }, *intVariant);
-            ContainerTypes type = std::visit([](auto&& a) { return ContainerInfo<decltype(a)>::Type(); }, *intVariant);
-            if (auto arrayPtr = std::get_if<ArrayPointer<int>>(intVariant)) {
-                size_t size = arrayPtr->Size();
-                stringBuilder.AppendAtomic(indent, "%s%s%.*s <int[%zu]>%s", usagePrefix, namePrefix, argNameLen, argNameData, size, usageSuffix);
-            } else if (auto vectorPtr = std::get_if<VectorPointer<int>>(intVariant)) {
-                size_t minArgs = vectorPtr->minArgs;
-                size_t maxArgs = vectorPtr->maxArgs;
+            if (!arg.isPositional) {
+                namePrefix = "-";
+            }            
+            if (!(flags & kRequired) && !(arg.flags & kRequired)) {
+                usagePrefix = "["; 
+                usageSuffix = "]"; 
+            } 
+            const char* typeString = std::visit([](auto&& a) { return TypeInfo<decltype(a)>::String(); }, arg.argument);
+            if constexpr (std::is_same_v<bool, ValueType>) {
+                stringBuilder.AppendAtomic(indent, "%s%s%.*s%s", usagePrefix, namePrefix, argNameLen, argNameData, usageSuffix);
+            } else if constexpr (std::is_same_v<ValueType*, ContainerType>) {
+                stringBuilder.AppendAtomic(indent, "%s%s%.*s <%s>%s", usagePrefix, namePrefix, argNameLen, argNameData, typeString, usageSuffix);
+            } else if constexpr (std::is_same_v<std::array<ValueType, 0>*, ContainerType>) {
+                auto size = a.Size();
+                stringBuilder.AppendAtomic(indent, "%s%s%.*s <%s[%zu]>%s", usagePrefix, namePrefix, argNameLen, argNameData, typeString, size, usageSuffix);
+            } else if constexpr (std::is_same_v<std::vector<ValueType>*, ContainerType>) {
+                auto minArgs = a.minArgs;
+                auto maxArgs = a.maxArgs;
                 if (minArgs != 0 && maxArgs != std::numeric_limits<size_t>::max()) {
-                    stringBuilder.AppendAtomic(indent, "%s%s%.*s <int[%zu:%zu]>%s", usagePrefix, namePrefix, argNameLen, argNameData, minArgs, maxArgs, usageSuffix);
+                    stringBuilder.AppendAtomic(indent, "%s%s%.*s <%s[%zu:%zu]>%s", usagePrefix, namePrefix, argNameLen, argNameData, typeString, minArgs, maxArgs, usageSuffix);
                 } else if (minArgs != 0 && maxArgs == std::numeric_limits<size_t>::max()) {
-                    stringBuilder.AppendAtomic(indent, "%s%s%.*s <int[%zu:]>%s", usagePrefix, namePrefix, argNameLen, argNameData, minArgs, usageSuffix);
+                    stringBuilder.AppendAtomic(indent, "%s%s%.*s <%s[%zu:]>%s", usagePrefix, namePrefix, argNameLen, argNameData, typeString, minArgs, usageSuffix);
                 } else if (minArgs == 0 && maxArgs != std::numeric_limits<size_t>::max()) {
-                    stringBuilder.AppendAtomic(indent, "%s%s%.*s <int[:%zu]>%s", usagePrefix, namePrefix, argNameLen, argNameData, maxArgs, usageSuffix);
+                    stringBuilder.AppendAtomic(indent, "%s%s%.*s <%s[:%zu]>%s", usagePrefix, namePrefix, argNameLen, argNameData, typeString, maxArgs, usageSuffix);
                 } else {
-                    stringBuilder.AppendAtomic(indent, "%s%s%.*s <int[...]>%s", usagePrefix, namePrefix, argNameLen, argNameData, usageSuffix);
+                    stringBuilder.AppendAtomic(indent, "%s%s%.*s <%s[...]>%s", usagePrefix, namePrefix, argNameLen, argNameData, typeString, usageSuffix);
                 }
-            } else { // Either int or int T::*
-                stringBuilder.AppendAtomic(indent, "%s%s%.*s <int>%s", usagePrefix, namePrefix, argNameLen, argNameData, usageSuffix);
+            } else {
+                static_assert(AlwaysFalse<ValueType>::value, "Unhandled Argument Type");
             }
-        } else if (auto floatVariant = std::get_if<FloatVariant>(&arg.argument)) {
-            if (auto arrayPtr = std::get_if<ArrayPointer<float>>(floatVariant)) {
-                size_t size = arrayPtr->Size();
-                stringBuilder.AppendAtomic(indent, "%s%s%.*s <float[%zu]>%s", usagePrefix, namePrefix, argNameLen, argNameData, size, usageSuffix);
-            } else if (auto arrayPtr = std::get_if<ArrayPointer<double>>(floatVariant)) {
-                size_t size = arrayPtr->Size();
-                stringBuilder.AppendAtomic(indent, "%s%s%.*s <double[%zu]>%s", usagePrefix, namePrefix, argNameLen, argNameData, size, usageSuffix);
-            } else if (std::holds_alternative<DataPointer<float>>(*floatVariant)) {
-                stringBuilder.AppendAtomic(indent, "%s%s%.*s <float>%s", usagePrefix, namePrefix, argNameLen, argNameData, usageSuffix);
-            } else if (std::holds_alternative<DataPointer<double>>(*floatVariant)) {
-                stringBuilder.AppendAtomic(indent, "%s%s%.*s <double>%s", usagePrefix, namePrefix, argNameLen, argNameData, usageSuffix);
+        }, arg.argument);
+    }
+
+    void DescribeArg(const Arg& arg, const T& t, int usageIndent, StringBuilder& usageBuilder, StringBuilder& descriptionBuilder, uint64_t flags) const {
+        int descriptionIndent = 0;
+        StringBuilder defaultBuilder(64); // used for building strings for default values
+
+        std::visit([&](auto&& a) {
+            auto ArrayDefault = [&defaultBuilder](auto arrayBegin, size_t size) {
+                if (size == 0) return;
+                for (size_t i = 0; i < size - 1; ++i) {
+                    defaultBuilder.AppendAtomic("%s ", to_string(arrayBegin[i]).c_str());
+                }
+                defaultBuilder.AppendAtomic("%s", to_string(arrayBegin[size-1]).c_str());
+            };
+
+            using ValueType = typename std::remove_reference_t<decltype(a)>::value_type;
+            using ContainerType = typename std::remove_reference_t<decltype(a)>::container_type;
+
+            auto argNameLen = static_cast<int>(arg.name.size());
+            auto argNameData = arg.name.data();
+
+            const char* usagePrefix = "";
+            const char* usageSuffix = "";
+            const char* namePrefix = "";
+            const char* typeString = std::visit([](auto&& a) { return TypeInfo<decltype(a)>::String(); }, arg.argument);
+
+            if (!arg.isPositional) {
+                namePrefix = "-";
+            }            
+            if (!(flags & kRequired) && !(arg.flags & kRequired)) {
+                usagePrefix = "["; 
+                usageSuffix = "]"; 
             }
-        } else if (auto stringVariantPtr = std::get_if<StringVariant>(&arg.argument)) {
-            stringBuilder.AppendAtomic(indent, "%s%s%.*s <string>%s", usagePrefix, namePrefix, argNameLen, argNameData, usageSuffix);
-        } else if (auto boolVariantPtr = std::get_if<BoolVariant>(&arg.argument)) {
-            stringBuilder.AppendAtomic(indent, "%s%s%.*s%s", usagePrefix, namePrefix, argNameLen, argNameData, usageSuffix);
+
+            if constexpr (std::is_same_v<bool, ValueType>) {
+                usageBuilder.AppendAtomic(usageIndent, " %s%s%.*s%s", usagePrefix, namePrefix, argNameLen, argNameData, usageSuffix);
+
+                descriptionIndent = FormattedLength("    %s%.*s", namePrefix, argNameLen, argNameData);
+                descriptionBuilder.AppendAtomic(0, "    %s%.*s", namePrefix, argNameLen, argNameData);
+
+                defaultBuilder.AppendAtomic("%s", a.Get(t) ? "true" : "false");
+            } else if constexpr (std::is_same_v<ValueType*, ContainerType>) {
+                usageBuilder.AppendAtomic(usageIndent, " %s%s%.*s <%s>%s", usagePrefix, namePrefix, argNameLen, argNameData, typeString, usageSuffix);
+
+                descriptionIndent = FormattedLength("    %s%.*s <%s>", namePrefix, argNameLen, argNameData, typeString);
+                descriptionBuilder.AppendAtomic(0, "    %s%.*s <%s>", namePrefix, argNameLen, argNameData, typeString);
+
+                if constexpr (std::is_same_v<std::string_view, ValueType>) {
+                    defaultBuilder.AppendAtomic("%.*s", static_cast<int>(a.Get(t).size()), a.Get(t).data());
+                } else if constexpr(std::is_same_v<std::string, ValueType>) {
+                    defaultBuilder.AppendAtomic("%s", a.Get(t).c_str());
+                } else {
+                    defaultBuilder.AppendAtomic("%s", to_string(a.Get(t)).c_str());
+                }
+            } else if constexpr (std::is_same_v<std::array<ValueType, 0>*, ContainerType>) {
+                auto size = a.Size();
+                usageBuilder.AppendAtomic(usageIndent, " %s%s%.*s <%s[%zu]>%s", usagePrefix, namePrefix, argNameLen, argNameData, typeString, size, usageSuffix);
+
+                descriptionIndent = FormattedLength("    %s%.*s <%s[%zu]>", namePrefix, argNameLen, argNameData, typeString, size);
+                descriptionBuilder.AppendAtomic(0, "    %s%.*s <%s[%zu]>", namePrefix, argNameLen, argNameData, typeString, size);
+                
+                ArrayDefault(a.Begin(t), size);
+            } else if constexpr (std::is_same_v<std::vector<ValueType>*, ContainerType>) {
+                auto minArgs = a.minArgs;
+                auto maxArgs = a.maxArgs;
+                ArrayDefault(a.Get(t).begin(), a.Get(t).size());
+
+                if (minArgs != 0 && maxArgs != std::numeric_limits<size_t>::max()) {
+                    usageBuilder.AppendAtomic(usageIndent, " %s%s%.*s <%s[%zu:%zu]>%s", usagePrefix, namePrefix, argNameLen, argNameData, typeString, minArgs, maxArgs, usageSuffix);
+                    descriptionIndent = FormattedLength("    %s%.*s <%s[%zu:%zu]>", namePrefix, argNameLen, argNameData, typeString, minArgs, maxArgs);
+                    descriptionBuilder.AppendAtomic(0, "    %s%.*s <i%s[%zu:%zu]>", namePrefix, argNameLen, argNameData, typeString, minArgs, maxArgs);
+                } else if (minArgs != 0 && maxArgs == std::numeric_limits<size_t>::max()) {
+                    usageBuilder.AppendAtomic(usageIndent, " %s%s%.*s <%s[%zu:]>%s", usagePrefix, namePrefix, argNameLen, argNameData, typeString, minArgs, usageSuffix);
+                    descriptionIndent = FormattedLength("    %s%.*s <%s[%zu:]>", namePrefix, argNameLen, argNameData, typeString, minArgs);
+                    descriptionBuilder.AppendAtomic(0, "    %s%.*s <%s[%zu:]>", namePrefix, argNameLen, argNameData, typeString, minArgs);
+                } else if (minArgs == 0 && maxArgs != std::numeric_limits<size_t>::max()) {
+                    usageBuilder.AppendAtomic(usageIndent, " %s%s%.*s <%s[:%zu]>%s", usagePrefix, namePrefix, argNameLen, argNameData, typeString, maxArgs, usageSuffix);
+                    descriptionIndent = FormattedLength("    %s%.*s <%s[:%zu]>", namePrefix, argNameLen, argNameData, typeString, maxArgs);
+                    descriptionBuilder.AppendAtomic(0, "    %s%.*s <%s[:%zu]>", namePrefix, argNameLen, argNameData, typeString, maxArgs);
+                } else {
+                    usageBuilder.AppendAtomic(usageIndent, " %s%s%.*s <%s[...]>%s", usagePrefix, namePrefix, argNameLen, argNameData, typeString, usageSuffix);
+                    descriptionIndent = FormattedLength("    %s%.*s <%s[...]>", namePrefix, argNameLen, argNameData, typeString);
+                    descriptionBuilder.AppendAtomic(0, "    %s%.*s <%s[...]>", namePrefix, argNameLen, argNameData, typeString);
+                }
+            } else {
+                static_assert(AlwaysFalse<ValueType>::value, "Unhandled Argument Type");
+            }
+        }, arg.argument);
+                    
+        // Append every argument's description
+        if ((flags & kRequired) || (arg.flags & kRequired)) {
+            descriptionBuilder.AppendAtomic(descriptionIndent, " (Required): ");
+        } else {
+            descriptionBuilder.AppendAtomic(": ");
         }
+        descriptionBuilder.AppendNatural(descriptionIndent, arg.description.data(), arg.description.size());
+
+        if (!(flags & kNoDefault) && !(arg.flags & kNoDefault)) {
+            auto sv = defaultBuilder.GetStringView();
+            descriptionBuilder.AppendChar(' ');
+            descriptionBuilder.AppendAtomic(descriptionIndent, "(Default: %.*s)", static_cast<int>(sv.size()), sv.data());
+        }
+        descriptionBuilder.NewLine(2);
     }
 
     inline void ReportError(const char* fmt, va_list vaList) {

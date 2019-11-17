@@ -1,3 +1,27 @@
+/* 
+MIT License
+
+Copyright (c) [2019] [Rob Cusimano]
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+*/
+
 #pragma once
 
 #include <array>
@@ -12,11 +36,6 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
-
-// Tenets
-// 1. Great for the command line user
-// 2. Great for the command line programmer
-// 3. Understandable for us to program and maintain
 
 // TODO:
 // vector<type>
@@ -237,18 +256,12 @@ struct CommandLine {
                     return {v, true};
                 };
 
-                if (auto intPtr = std::get_if<int*>(intVariant)) {
+                if (auto intPtr = std::get_if<DataPointer<int>>(intVariant)) {
                     auto [v, success] =  ParseInt();
                     if (!success) {
                         return {t, false};
                     }
-                    **intPtr = v;
-                } else if (auto memberPtr = std::get_if<int T::*>(intVariant)) {
-                    auto [v, success] =  ParseInt();
-                    if (!success) {
-                        return {t, false};
-                    }
-                    t.*(*memberPtr) = v;
+                    intPtr->Get(t) = v;
                 } else if (auto arrayPtr = std::get_if<Array<int>>(intVariant)) {
                     if (!ParseArray(arrayPtr, ParseInt)) {
                         return {t, false};
@@ -259,7 +272,7 @@ struct CommandLine {
                     }
                 } else if (auto vector = std::get_if<Vector<int>>(intVariant)) {
                     // false means don't report errors
-                    auto c = ParseVector(*vector, argc, &argIndex, ParseInt, false);
+                    auto c = ParseVector(t, *vector, argc, &argIndex, ParseInt, false);
                     if (c < vector->minArgs) {
                         ReportError("\"%.*s\" expected at least %zu arguments but only found %zu\n", argNameLen, argName, vector->minArgs, vector->vec->size());
                         return {t, false};
@@ -270,7 +283,7 @@ struct CommandLine {
                     }
                 } else if (auto vectorMember = std::get_if<VectorMember<int>>(intVariant)) {
                     // false means don't report errors
-                    auto c = ParseMemberVector(t, *vectorMember, argc, &argIndex, ParseInt, false);
+                    auto c = ParseVector(t, *vectorMember, argc, &argIndex, ParseInt, false);
                     if (c < vectorMember->minArgs) {
                         ReportError("\"%.*s\" expected at least %zu arguments but only found %zu\n", argNameLen, argName, vectorMember->minArgs, (t.*(vectorMember->vec)).size());
                         return {t, false};
@@ -320,70 +333,48 @@ struct CommandLine {
                     }
                     return {v, true};
                 };
-                if (auto floatPtr = std::get_if<float*>(floatVariant)) {
+                if (auto floatPtr = std::get_if<DataPointer<float>>(floatVariant)) {
                     auto [v, success] = ParseFloat();
                     if (!success) {
                         return {t, false};
                     }
-                    arg.wasSet = true;
-                    **floatPtr = v;
-                } else if (auto memberPtr = std::get_if<float T::*>(floatVariant)) {
-                    auto [v, success] = ParseFloat();
-                    if (!success) {
-                        return {t, false};
-                    }
-                    arg.wasSet = true;
-                    t.*(*memberPtr) = v;
-                } else if (auto doublePtr = std::get_if<double*>(floatVariant)) {
+                    floatPtr->Get(t) = v;
+                } else if (auto doublePtr = std::get_if<DataPointer<double>>(floatVariant)) {
                     auto [v, success] = ParseDouble();
                     if (!success) {
                         return {t, false};
                     }
-                    arg.wasSet = true;
-                    **doublePtr = v;
-                } else if (auto memberPtr = std::get_if<double T::*>(floatVariant)) {
-                    auto [v, success] = ParseDouble();
-                    if (!success) {
-                        return {t, false};
-                    }
-                    arg.wasSet = true;
-                    t.*(*memberPtr) = v;
+                    doublePtr->Get(t) = v;
                 } else if (auto arrayPtr = std::get_if<Array<float>>(floatVariant)) {
                     if (!ParseArray(arrayPtr, ParseFloat)) {
                         return {t, false};
                     }
-                    arg.wasSet = true;
                 } else if (auto arrayPtr = std::get_if<Array<double>>(floatVariant)) {
                     if (!ParseArray(arrayPtr, ParseDouble)) {
                         return {t, false};
                     }
-                    arg.wasSet = true;
                 } else if (auto arrayMemberVariant = std::get_if<ArrayMemberVariant<float>>(floatVariant)) {
                     if (!ParseArrayMemberVariant(t, arrayMemberVariant, ParseFloat)) {
                         return {t, false};
                     }
-                    arg.wasSet = true;
                 } else if (auto arrayMemberVariant = std::get_if<ArrayMemberVariant<double>>(floatVariant)) {
                     if (!ParseArrayMemberVariant(t, arrayMemberVariant, ParseDouble)) {
                         return {t, false};
                     }
-                    arg.wasSet = true;
                 } else {
                     ReportError("Unhandled float variant\n");
                     return {t, false};
                 }
+                arg.wasSet = true;
             } else if (auto boolVariant = std::get_if<BoolVariant>(&arg.argument)) {
                 assert(!positionalArg);
-                if (auto boolPtr = std::get_if<bool*>(boolVariant)) {
-                    arg.wasSet = true;
-                    **boolPtr = !**boolPtr;
-                } else if (auto memberPtr = std::get_if<bool T::*>(boolVariant)) {
-                    arg.wasSet = true;
-                    t.*(*memberPtr) = !(t.*(*memberPtr));
+                if (auto boolPtr = std::get_if<DataPointer<bool>>(boolVariant)) {
+                    boolPtr->Get(t) = !boolPtr->Get(t);
                 } else {
                     ReportError("Unhandled bool variant\n");
                     return {t, false};
                 }
+                arg.wasSet = true;
             } else if (auto stringVariant = std::get_if<StringVariant>(&arg.argument)) {
                 argIndex++;
                 if (argIndex >= argc) {
@@ -391,20 +382,11 @@ struct CommandLine {
                     return {t, false};
                 }
                 auto valueToken = std::string_view(argv[argIndex]);
-
-                if (auto stringPtr = std::get_if<std::string*>(stringVariant)) {
-                    **stringPtr = valueToken;
+                std::visit([&arg, &t, &valueToken](auto& strDataPtr) {
+                    strDataPtr.Get(t) = valueToken;
                     arg.wasSet = true;
-                } else if (auto memberPtr = std::get_if<std::string T::*>(stringVariant)) {
-                    t.*(*memberPtr) = valueToken;
-                    arg.wasSet = true;
-                } else if (auto stringViewPtr = std::get_if<std::string_view*>(stringVariant)) {
-                    **stringViewPtr = valueToken;
-                    arg.wasSet = true;
-                } else if (auto memberPtr = std::get_if<std::string_view T::*>(stringVariant)) {
-                    t.*(*memberPtr) = valueToken;
-                    arg.wasSet = true;
-                } else {
+                }, *stringVariant);
+                if (!arg.wasSet) {
                     ReportError("Unhandled string variant\n");
                     return {t, false};
                 }
@@ -556,10 +538,8 @@ struct CommandLine {
                     descriptionIndent = FormattedLength("    %s%.*s <int>", namePrefix, argNameLen, argNameData);
                     descriptionBuilder.AppendAtomic(0, "    %s%.*s <int>", namePrefix, argNameLen, argNameData);
 
-                    if (auto memberPtr = std::get_if<int T::*>(intVariant)) {
-                        defaultBuilder.AppendAtomic("%s", to_string(t.*(*memberPtr)).c_str());
-                    } else if (auto ptr = std::get_if<int*>(intVariant)) {
-                        defaultBuilder.AppendAtomic("%s", to_string(**ptr).c_str());
+                    if (auto intPtr = std::get_if<DataPointer<int>>(intVariant)) {
+                        defaultBuilder.AppendAtomic("%s", to_string(intPtr->Get(t)).c_str());
                     }
                 }
             } else if (auto floatVariant = std::get_if<FloatVariant>(&arg.argument)) {
@@ -597,28 +577,20 @@ struct CommandLine {
                     
                     descriptionIndent = FormattedLength("    %s%.*s <double[%zu]>", namePrefix, argNameLen, argNameData, size);
                     descriptionBuilder.AppendAtomic(0, "    %s%.*s <double[%zu]>", namePrefix, argNameLen, argNameData, size);
-                } else if (std::holds_alternative<float*>(*floatVariant) || std::holds_alternative<float T::*>(*floatVariant)) {
+                } else if (auto floatPtr = std::get_if<DataPointer<float>>(floatVariant)) {
                     usageBuilder.AppendAtomic(usageIndent, " %s%s%.*s <float>%s", usagePrefix, namePrefix, argNameLen, argNameData, usageSuffix);
                     
                     descriptionIndent = FormattedLength("    %s%.*s <float>", namePrefix, argNameLen, argNameData);
                     descriptionBuilder.AppendAtomic(0, "    %s%.*s <float>", namePrefix, argNameLen, argNameData);
-                    
-                    if (auto memberPtr = std::get_if<float T::*>(floatVariant)) {
-                        defaultBuilder.AppendAtomic("%s", to_string(t.*(*memberPtr)).c_str());
-                    } else if (auto ptr = std::get_if<float*>(floatVariant)) {
-                        defaultBuilder.AppendAtomic("%s", to_string(**ptr).c_str());
-                    }
-                } else if (std::holds_alternative<double*>(*floatVariant) || std::holds_alternative<double T::*>(*floatVariant)) {
+
+                    defaultBuilder.AppendAtomic("%s", to_string(floatPtr->Get(t)).c_str());
+                } else if (auto doublePtr = std::get_if<DataPointer<double>>(floatVariant)) {
                     usageBuilder.AppendAtomic(usageIndent, " %s%s%.*s <double>%s", usagePrefix, namePrefix, argNameLen, argNameData, usageSuffix);
                     
                     descriptionIndent = FormattedLength("    %s%.*s <double>", namePrefix, argNameLen, argNameData);
                     descriptionBuilder.AppendAtomic(0, "    %s%.*s <double>", namePrefix, argNameLen, argNameData);
                     
-                    if (auto memberPtr = std::get_if<double T::*>(floatVariant)) {
-                        defaultBuilder.AppendAtomic("%s", to_string(t.*(*memberPtr)).c_str());
-                    } else if (auto ptr = std::get_if<double*>(floatVariant)) {
-                        defaultBuilder.AppendAtomic("%s", to_string(**ptr).c_str());
-                    }
+                    defaultBuilder.AppendAtomic("%s", to_string(doublePtr->Get(t)).c_str());
                 }
             } else if (auto stringVariantPtr = std::get_if<StringVariant>(&arg.argument)) {
                 usageBuilder.AppendAtomic(usageIndent, " %s%s%.*s <string>%s", usagePrefix, namePrefix, argNameLen, argNameData, usageSuffix);
@@ -626,24 +598,19 @@ struct CommandLine {
                 descriptionIndent = FormattedLength("    %s%.*s <string>", namePrefix, argNameLen, argNameData);
                 descriptionBuilder.AppendAtomic(0, "    %s%.*s <string>", namePrefix, argNameLen, argNameData);
 
-                if (auto memberPtr = std::get_if<std::string T::*>(stringVariantPtr)) {
-                    defaultBuilder.AppendAtomic("%s", (t.*(*memberPtr)).c_str());
-                } else if (auto ptr = std::get_if<std::string*>(stringVariantPtr)) {
-                    defaultBuilder.AppendAtomic("%s", (**ptr).c_str());
-                } else if (auto memberPtr = std::get_if<std::string_view T::*>(stringVariantPtr)) {
-                    defaultBuilder.AppendAtomic("%.*s", static_cast<int>((t.*(*memberPtr)).size()), (t.*(*memberPtr)).data());
-                } else if (auto ptr = std::get_if<std::string_view*>(stringVariantPtr)) {
-                    defaultBuilder.AppendAtomic("%.*s", static_cast<int>((**ptr).size()), (**ptr).data());
+                if (auto stringPtr = std::get_if<DataPointer<std::string>>(stringVariantPtr)) {
+                    defaultBuilder.AppendAtomic("%s", stringPtr->Get(t).c_str());
+                } else if (auto stringViewPtr = std::get_if<DataPointer<std::string_view>>(stringVariantPtr)) {
+                    auto sv = stringViewPtr->Get(t);
+                    defaultBuilder.AppendAtomic("%.*s", static_cast<int>(sv.size()), sv.data());
                 }
             } else if (auto boolVariantPtr = std::get_if<BoolVariant>(&arg.argument)) {
                 usageBuilder.AppendAtomic(usageIndent, " %s%s%.*s%s", usagePrefix, namePrefix, argNameLen, argNameData, usageSuffix);
                 
                 descriptionIndent = FormattedLength("    %s%.*s", namePrefix, argNameLen, argNameData);
                 descriptionBuilder.AppendAtomic(0, "    %s%.*s", namePrefix, argNameLen, argNameData);
-                if (auto memberPtr = std::get_if<bool T::*>(boolVariantPtr)) {
-                    defaultBuilder.AppendAtomic("%s", (t.*(*memberPtr)) ? "true" : "false");
-                } else if (auto ptr = std::get_if<bool*>(boolVariantPtr)) {
-                    defaultBuilder.AppendAtomic("%s", (**ptr) ? "true" : "false");
+                if (auto boolPtr = std::get_if<DataPointer<bool>>(boolVariantPtr)) {
+                    defaultBuilder.AppendAtomic("%s", boolPtr->Get(t) ? "true" : "false");
                 }
             }
                     
@@ -681,18 +648,44 @@ struct CommandLine {
 
 private:
     template <typename U>
+    struct DataPointer {
+        DataPointer(U* v) : v_(v) {};
+        DataPointer(U T::* v) : v_(v) {};
+        U& Get(T& t) {
+            if (auto v = std::get_if<U T::*>(&v_)) {
+                return t.*(*v);
+            } else {
+                return *std::get<0>(v_);
+            }
+        }
+        const U& Get(const T& t) const {
+            if (auto v = std::get_if<U T::*>(&v_)) {
+                return t.*(*v);
+            } else {
+                return *std::get<0>(v_);
+            }
+        }
+        std::variant<U*, U T::*> v_;
+    };
+    template <typename U>
     struct Array {
         U* begin;
         U* end;
     };
     template <typename U>
     struct Vector {
+        std::vector<U>* Get(T&) const {
+            return vec;
+        }
         std::vector<U>* vec;
         const size_t minArgs;
         const size_t maxArgs;
     };
     template <typename U>
     struct VectorMember{
+        std::vector<U>* Get(T& t) const {
+            return &(t.*vec);
+        }
         std::vector<U> T::* vec;
         const size_t minArgs;
         const size_t maxArgs;
@@ -701,10 +694,10 @@ private:
     template <typename U>
     using ArrayMemberVariant = std::variant<std::array<U, 1> T::*, std::array<U, 2> T::*, std::array<U, 3> T::*, std::array<U, 4> T::*, std::array<U, 5> T::*,
          std::array<U, 6> T::*, std::array<U, 7> T::*, std::array<U, 8> T::*, std::array<U, 9> T::*, std::array<U, 10> T::*>;
-    using IntVariant = std::variant<int*, int T::*, Array<int>, ArrayMemberVariant<int>, Vector<int>, VectorMember<int>>;
-    using FloatVariant = std::variant<float*, float T::*, double*, double T::*, Array<float>, Array<double>, ArrayMemberVariant<float>, ArrayMemberVariant<double>>;
-    using BoolVariant = std::variant<bool*, bool T::*>;
-    using StringVariant = std::variant<std::string_view*, std::string_view T::*, std::string*, std::string T::*>;
+    using IntVariant = std::variant<DataPointer<int>, Array<int>, ArrayMemberVariant<int>, Vector<int>, VectorMember<int>>;
+    using FloatVariant = std::variant<DataPointer<float>, DataPointer<double>, Array<float>, Array<double>, ArrayMemberVariant<float>, ArrayMemberVariant<double>>;
+    using BoolVariant = std::variant<DataPointer<bool>>;
+    using StringVariant = std::variant<DataPointer<std::string_view>, DataPointer<std::string>>;
 
     using ArgumentVariant = std::variant<IntVariant, FloatVariant, BoolVariant, StringVariant>;
     
@@ -770,10 +763,11 @@ private:
         }, *arrayMemberVariantPtr);
     }
     
-    template <typename U, typename ParseFunc, typename ...FuncArgs>
-    size_t ParseVector(Vector<U> vector, int argc, int* argIndex, ParseFunc&& parseFunc, FuncArgs&&... args) {
+    template <typename Vec, typename ParseFunc, typename ...FuncArgs>
+    size_t ParseVector(T& t, Vec&& vec, int argc, int* argIndex, ParseFunc&& parseFunc, FuncArgs&&... args) {
         // For vectors we just consume until we can no longer consume any more
-        vector.vec->clear();
+        auto vecPtr = vec.Get(t);
+        vecPtr->clear();
         size_t i = 0;
         for (; *argIndex <= argc; ++i) {
             auto [v, success] = parseFunc(std::forward<FuncArgs&&>(args)...);
@@ -781,23 +775,7 @@ private:
                 *argIndex -= 1;
                 break;
             }
-            vector.vec->push_back(v);
-        }
-        return i;
-    }
-    
-    template <typename U, typename ParseFunc, typename ...FuncArgs>
-    size_t ParseMemberVector(T& t, VectorMember<U> vector, int argc, int* argIndex, ParseFunc&& parseFunc, FuncArgs&&... args) {
-        // For vectors we just consume until we can no longer consume any more
-        (t.*(vector.vec)).clear();
-        size_t i = 0;
-        for (; *argIndex <= argc; ++i) {
-            auto [v, success] = parseFunc(std::forward<FuncArgs&&>(args)...);
-            if (!success) {
-                *argIndex -= 1;
-                break;
-            }
-            (t.*(vector.vec)).push_back(v);
+            vecPtr->push_back(v);
         }
         return i;
     }
@@ -864,9 +842,9 @@ private:
                     return std::tuple_size<JustMemberT<decltype(arrayMember)>>::value;
                 }, *arrayMemberVariant);
                 stringBuilder.AppendAtomic(indent, "%s%s%.*s <double[%zu]>%s", usagePrefix, namePrefix, argNameLen, argNameData, size, usageSuffix);
-            } else if (std::holds_alternative<float*>(*floatVariant) || std::holds_alternative<float T::*>(*floatVariant)) {
+            } else if (std::holds_alternative<DataPointer<float>>(*floatVariant)) {
                 stringBuilder.AppendAtomic(indent, "%s%s%.*s <float>%s", usagePrefix, namePrefix, argNameLen, argNameData, usageSuffix);
-            } else if (std::holds_alternative<double*>(*floatVariant) || std::holds_alternative<double T::*>(*floatVariant)) {
+            } else if (std::holds_alternative<DataPointer<double>>(*floatVariant)) {
                 stringBuilder.AppendAtomic(indent, "%s%s%.*s <double>%s", usagePrefix, namePrefix, argNameLen, argNameData, usageSuffix);
             }
         } else if (auto stringVariantPtr = std::get_if<StringVariant>(&arg.argument)) {

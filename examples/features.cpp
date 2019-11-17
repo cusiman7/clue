@@ -52,10 +52,12 @@ int main(int argc, char** argv) {
     cl.Optional(&str_view, "raw_strview", "Another string view to finish it all off");
     cl.Optional(&numbers, "raw_numbers", "A bunch of numbers");
 
-    auto [args, success] = cl.ParseArgs(argc, argv);
-    if (!success) {
+    auto maybeArgs = cl.ParseArgs(argc, argv);
+    if (!maybeArgs) {
         printf("Arg parsing failed\n");
+        return 1;
     }
+    auto args = maybeArgs.value();
     printf("Args: \n");
     printf("  hello = %s\n", args.hello ? "true" : "false");
     printf("  i = %d\n", args.i);

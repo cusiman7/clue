@@ -27,9 +27,9 @@ int main(int argc, char** argv) {
     cl.Optional<0, 5>(&Args::atMostFive, "atMostFive", "At most 5 numbers");
     cl.Optional<3, 5>(&Args::threeToFive, "threeToFive", "3 to 5 numbers");
 
-    auto [args, success] = cl.ParseArgs(argc, argv);
-    PrintVector(args.unlimited, "unlimited");
-    PrintVector(args.atLeastThree, "atLeastThree");
-    PrintVector(args.atMostFive, "atMostFive");
-    PrintVector(args.threeToFive, "threeToFive");
+    auto args = cl.ParseArgs(argc, argv);
+    PrintVector(args->unlimited, "unlimited");
+    PrintVector(args->atLeastThree, "atLeastThree");
+    PrintVector(args->atMostFive, "atMostFive");
+    PrintVector(args->threeToFive, "threeToFive");
 }

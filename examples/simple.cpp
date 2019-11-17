@@ -14,10 +14,10 @@ int main(int argc, char** argv) {
     cl.Optional(&Args::count, "count", "Number of times to print the message");
     cl.Positional(&Args::message, "message", "A message to print");
 
-    auto [args, success] = cl.ParseArgs(argc, argv);
+    auto args = cl.ParseArgs(argc, argv);
 
-    for (int i = 0; i < args.count; ++i) {
-        std::cout << args.message << "\n";
+    for (int i = 0; i < args->count; ++i) {
+        std::cout << args->message << "\n";
     }
 }
 

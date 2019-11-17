@@ -27,6 +27,7 @@ SOFTWARE.
 #include <array>
 #include <charconv>
 #include <limits>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -52,15 +53,9 @@ SOFTWARE.
 
 namespace clue {
 
-template <typename U>
-struct ParseResult {
-    U value;
-    bool success;
-};
-
 enum ParseFlags : uint64_t {
     kNone             = 0,
-    kNoExitOnError    = 1,  // If any error is encountered, don't exit. Normal behavior is to call exit(1) on error. If set, ParseResult{T, false} will be returned from ParseArgs on error. Used with ParseArgs only.
+    kNoExitOnError    = 1,  // If any error is encountered, don't exit. Normal behavior is to call exit(1) on error. If set, and empty std::optional<T> will be returned from ParseArgs on error. Used with ParseArgs only.
     kSkipUnrecognized = 2,  // Skip over unrecognized arguments. Normal behavior is to error out on first unrecognized argument. Used with ParseArgs only.
     kNoAutoHelp       = 4,  // Skip auto generating help args "-h", "-help", "--help", and "/?". Used with ParseArgs only.
     kNoDefault        = 8,  // Skip outputting defaults. Normal behavior is to print "(Default: <defaults here>)". Can be used for an entire ParseArgs (used with auto-help) or with Optional/Positional for individual args
@@ -171,11 +166,10 @@ struct CommandLine {
     }
 
     // Parse argv, matching args added with Optional and Positional before ParseArgs was called
-    // On success returns a ParseResult{T, true} with a newly constructed T filled in with options
-    // On failure returns a ParseResult{T, false} where T holds the arguments parsed successfully until the failure
+    // On success returns a std::opitonal<T> with a newly constructed T filled in with options
+    // On failure calls std::exit(1) unless the flag NoExitOnError is passesd where an empty std::optional is returned
     //    Note: If there are valid arguments after the failed argument that could have been parsed into T, they will have been skipped
-    // Flags
-    ParseResult<T> ParseArgs(const int argc, char** const argv, uint64_t flags = kNone) {
+    std::optional<T> ParseArgs(const int argc, char** const argv, uint64_t flags = kNone) {
         currentFlags_ = static_cast<ParseFlags>(flags);
         size_t currentPositionalArg = 0;
         T t;
@@ -211,7 +205,7 @@ struct CommandLine {
             if (!argPtr) {
                 if (!(flags & kSkipUnrecognized)) {
                     ReportError("Unrecognized argument \"%.*s\"\n", tokenLen, token.data());
-                    return {t, false};
+                    return {};
                 } else {
                     continue;
                 }
@@ -228,13 +222,13 @@ struct CommandLine {
             }
 
             if (auto intVariant = std::get_if<IntVariant>(&arg.argument)) {
-                auto ParseInt = [this, argc, &argv, &argIndex, &argName, argNameLen](bool reportErrors = true) -> ParseResult<int> {
+                auto ParseInt = [this, argc, &argv, &argIndex, &argName, argNameLen](bool reportErrors = true) -> std::optional<int> {
                     argIndex++;
                     if (argIndex >= argc) {
                         if (reportErrors) {
                             ReportError("\"%.*s\" expected an int value\n", argNameLen, argName);
                         }
-                        return {0, false};
+                        return {};
                     }
                     auto valueToken = std::string_view(argv[argIndex]);
                     auto valueTokenData = valueToken.data();
@@ -245,64 +239,64 @@ struct CommandLine {
                         if (reportErrors) {
                             ReportError("\"%.*s\" expected a string representing an int but instead found \"%.*s\"\n", argNameLen, argName, valueTokenLen, valueTokenData);
                         }
-                        return {v, false};
+                        return {};
                     } else if (result.ec == std::errc::result_out_of_range) {
                         if (reportErrors) {
                             ReportError("\"%.*s\" int value \"%.*s\" out of range [%d, %d]\n",
                             argNameLen, argName, valueTokenLen, valueTokenData, std::numeric_limits<int>::min(), std::numeric_limits<int>::max());
                         }
-                        return {v, false};
+                        return {};
                     }
-                    return {v, true};
+                    return {v};
                 };
 
                 if (auto intPtr = std::get_if<DataPointer<int>>(intVariant)) {
-                    auto [v, success] =  ParseInt();
-                    if (!success) {
-                        return {t, false};
+                    auto v =  ParseInt();
+                    if (!v) {
+                        return {};
                     }
-                    intPtr->Get(t) = v;
+                    intPtr->Get(t) = v.value();
                 } else if (auto arrayPtr = std::get_if<Array<int>>(intVariant)) {
                     if (!ParseArray(arrayPtr, ParseInt)) {
-                        return {t, false};
+                        return {};
                     }
                 } else if (auto arrayMemberVariant = std::get_if<ArrayMemberVariant<int>>(intVariant)) {
                     if (!ParseArrayMemberVariant(t, arrayMemberVariant, ParseInt)) {
-                        return {t, false};
+                        return {};
                     }
                 } else if (auto vector = std::get_if<Vector<int>>(intVariant)) {
                     // false means don't report errors
                     auto c = ParseVector(t, *vector, argc, &argIndex, ParseInt, false);
                     if (c < vector->minArgs) {
                         ReportError("\"%.*s\" expected at least %zu arguments but only found %zu\n", argNameLen, argName, vector->minArgs, vector->vec->size());
-                        return {t, false};
+                        return {};
                     }
                     if (c > vector->maxArgs) {
                         ReportError("\"%.*s\" expected at most %zu arguments but found %zu\n", argNameLen, argName, vector->maxArgs, vector->vec->size());
-                        return {t, false};
+                        return {};
                     }
                 } else if (auto vectorMember = std::get_if<VectorMember<int>>(intVariant)) {
                     // false means don't report errors
                     auto c = ParseVector(t, *vectorMember, argc, &argIndex, ParseInt, false);
                     if (c < vectorMember->minArgs) {
                         ReportError("\"%.*s\" expected at least %zu arguments but only found %zu\n", argNameLen, argName, vectorMember->minArgs, (t.*(vectorMember->vec)).size());
-                        return {t, false};
+                        return {};
                     }
                     if (c > vectorMember->maxArgs) {
                         ReportError("\"%.*s\" expected at most %zu arguments but fount more\n", argNameLen, argName, vectorMember->maxArgs);
-                        return {t, false};
+                        return {};
                     }
                 } else {
                     ReportError("Unhandled int variant\n");
-                    return {t, false};
+                    return {};
                 }
                 arg.wasSet = true;
             } else if (auto floatVariant = std::get_if<FloatVariant>(&arg.argument)) {
-                auto ParseFloat = [this, argc, &argv, &argIndex, &argName, argNameLen]() -> ParseResult<float> {
+                auto ParseFloat = [this, argc, &argv, &argIndex, &argName, argNameLen]() -> std::optional<float> {
                     argIndex++;
                     if (argIndex >= argc) {
                         ReportError("\"%.*s\" expected a float value\n", argNameLen, argName);
-                        return {0.0f, false};
+                        return {};
                     }
                     auto valueToken = std::string_view(argv[argIndex]);
                     auto valueTokenData = valueToken.data();
@@ -312,15 +306,15 @@ struct CommandLine {
                     // TODO: 0 could be from garbage strings!
                     if (v == HUGE_VAL || v == HUGE_VALF || v == HUGE_VALL) {
                         ReportError("\"%.*s\" float value \"%.*s\" out of range\n", argNameLen, argName, valueTokenLen, valueTokenData);
-                        return {v, false};
+                        return {};
                     }
-                    return {v, true};
+                    return {v};
                 };
-                auto ParseDouble = [this, argc, &argv, &argIndex, &argName, argNameLen]() -> ParseResult<double> {
+                auto ParseDouble = [this, argc, &argv, &argIndex, &argName, argNameLen]() -> std::optional<double> {
                     argIndex++;
                     if (argIndex >= argc) {
                         ReportError("\"%.*s\" expected a double value\n", argNameLen, argName);
-                        return {0.0, false};
+                        return {};
                     }
                     auto valueToken = std::string_view(argv[argIndex]);
                     auto valueTokenData = valueToken.data();
@@ -329,41 +323,41 @@ struct CommandLine {
                     auto v = strtod(valueToken.data(), nullptr);
                     if (v == HUGE_VAL || v == HUGE_VALF || v == HUGE_VALL) {
                         ReportError("\"%.*s\" double value \"%.*s\" out of range\n", argNameLen, argName, valueTokenLen, valueTokenData);
-                        return {v, false};
+                        return {};
                     }
-                    return {v, true};
+                    return {v};
                 };
                 if (auto floatPtr = std::get_if<DataPointer<float>>(floatVariant)) {
-                    auto [v, success] = ParseFloat();
-                    if (!success) {
-                        return {t, false};
+                    auto v = ParseFloat();
+                    if (!v) {
+                        return {};
                     }
-                    floatPtr->Get(t) = v;
+                    floatPtr->Get(t) = v.value();
                 } else if (auto doublePtr = std::get_if<DataPointer<double>>(floatVariant)) {
-                    auto [v, success] = ParseDouble();
-                    if (!success) {
-                        return {t, false};
+                    auto v = ParseDouble();
+                    if (!v) {
+                        return {};
                     }
-                    doublePtr->Get(t) = v;
+                    doublePtr->Get(t) = v.value();
                 } else if (auto arrayPtr = std::get_if<Array<float>>(floatVariant)) {
                     if (!ParseArray(arrayPtr, ParseFloat)) {
-                        return {t, false};
+                        return {};
                     }
                 } else if (auto arrayPtr = std::get_if<Array<double>>(floatVariant)) {
                     if (!ParseArray(arrayPtr, ParseDouble)) {
-                        return {t, false};
+                        return {};
                     }
                 } else if (auto arrayMemberVariant = std::get_if<ArrayMemberVariant<float>>(floatVariant)) {
                     if (!ParseArrayMemberVariant(t, arrayMemberVariant, ParseFloat)) {
-                        return {t, false};
+                        return {};
                     }
                 } else if (auto arrayMemberVariant = std::get_if<ArrayMemberVariant<double>>(floatVariant)) {
                     if (!ParseArrayMemberVariant(t, arrayMemberVariant, ParseDouble)) {
-                        return {t, false};
+                        return {};
                     }
                 } else {
                     ReportError("Unhandled float variant\n");
-                    return {t, false};
+                    return {};
                 }
                 arg.wasSet = true;
             } else if (auto boolVariant = std::get_if<BoolVariant>(&arg.argument)) {
@@ -372,14 +366,14 @@ struct CommandLine {
                     boolPtr->Get(t) = !boolPtr->Get(t);
                 } else {
                     ReportError("Unhandled bool variant\n");
-                    return {t, false};
+                    return {};
                 }
                 arg.wasSet = true;
             } else if (auto stringVariant = std::get_if<StringVariant>(&arg.argument)) {
                 argIndex++;
                 if (argIndex >= argc) {
                     ReportError("\"%.*s\" expected a string value\n", argNameLen, argName);
-                    return {t, false};
+                    return {};
                 }
                 auto valueToken = std::string_view(argv[argIndex]);
                 std::visit([&arg, &t, &valueToken](auto& strDataPtr) {
@@ -388,7 +382,7 @@ struct CommandLine {
                 }, *stringVariant);
                 if (!arg.wasSet) {
                     ReportError("Unhandled string variant\n");
-                    return {t, false};
+                    return {};
                 }
             } // end variant matching
         }
@@ -422,7 +416,7 @@ struct CommandLine {
             ReportError("%.*s\n", static_cast<int>(sv.size()), sv.data());
         }
 
-        return {t, true};
+        return {t};
     }
 
     // Prints the full usage string to stdout
@@ -736,11 +730,11 @@ private:
         auto* curr = arrayPtr->begin;
         auto* end = arrayPtr->end;
         while (curr != end) {
-            auto [v, success] = parseFunc(std::forward<FuncArgs&&>(args)...);
-            if (!success) {
+            auto v = parseFunc(std::forward<FuncArgs&&>(args)...);
+            if (!v) {
                 return false;
             }
-            *curr = v;
+            *curr = v.value();
             curr++;
         }
         return true;
@@ -752,11 +746,11 @@ private:
             auto* curr = (t.*arrayMember).begin();
             auto* end = (t.*arrayMember).end();
             while (curr != end) {
-                auto [v, success] = parseFunc(std::forward<FuncArgs&&>(args)...);
-                if (!success) {
+                auto v = parseFunc(std::forward<FuncArgs&&>(args)...);
+                if (!v) {
                     return false;
                 }
-                *curr = v;
+                *curr = v.value();
                 curr++;
             }
             return true;
@@ -770,12 +764,12 @@ private:
         vecPtr->clear();
         size_t i = 0;
         for (; *argIndex <= argc; ++i) {
-            auto [v, success] = parseFunc(std::forward<FuncArgs&&>(args)...);
-            if (!success) {
+            auto v = parseFunc(std::forward<FuncArgs&&>(args)...);
+            if (!v) {
                 *argIndex -= 1;
                 break;
             }
-            vecPtr->push_back(v);
+            vecPtr->push_back(v.value());
         }
         return i;
     }

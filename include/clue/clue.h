@@ -706,8 +706,8 @@ private:
         std::string_view name;
         std::string_view description;
         ParseFlags flags = kNone;
+        const bool isPositional = false;
         bool wasSet = false;
-        bool isPositional = false;
     };
 
     template <typename V>

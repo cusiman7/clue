@@ -62,6 +62,16 @@ enum ParseFlags : uint64_t {
     kRequired         = 16  // If arg with this flag is not provided by the user, an error will be reported. Applicable to both ParseArgs (meaning all arguments are required) and Optional/Positional (meaning only that arg is required)
 };
 
+template <typename> struct TypeInfo;
+template <typename> struct ContainerInfo;
+enum class ContainerTypes {
+    None,
+    Pointer,
+    Array,
+    Vector
+};
+
+
 struct StringBuilder {
     StringBuilder(int bufSize = 4096);
     ~StringBuilder();
@@ -585,8 +595,12 @@ struct CommandLine {
 private:
     template <typename U>
     struct DataPointer {
+        using value_type = U;
+        using container_type = U*;
+        
         DataPointer(U* v) : v_(v) {};
         DataPointer(U T::* v) : v_(v) {};
+
         U& Get(T& t) {
             if (auto v = std::get_if<U T::*>(&v_)) {
                 return t.*(*v);
@@ -601,10 +615,15 @@ private:
                 return *std::get<0>(v_);
             }
         }
+
         std::variant<U*, U T::*> v_;
     };
+    
     template <typename U>
     struct ArrayPointer {
+        using value_type = U;
+        using container_type = std::array<U, 0>*;
+
         template <size_t N>
         ArrayPointer(std::array<U, N>* array) : array_(array) {
             static_assert(N >= 1 && N <= 10, "Arrays from sizes 1 to 10 are supported");
@@ -629,13 +648,17 @@ private:
         constexpr size_t Size() const {
             return std::visit([](const auto array) -> size_t { return std::tuple_size<DataTypeT<decltype(array.Get(T{}))>>::value; }, array_);
         }
-
+        
         using ArrayVariant = std::variant<DataPointer<std::array<U, 1>>, DataPointer<std::array<U, 2>>, DataPointer<std::array<U, 3>>, DataPointer<std::array<U, 4>>, DataPointer<std::array<U, 5>>,
              DataPointer<std::array<U, 6>>, DataPointer<std::array<U, 7>>, DataPointer<std::array<U, 8>>, DataPointer<std::array<U, 9>>, DataPointer<std::array<U, 10>>>;
         ArrayVariant array_;
     };
+
     template <typename U>
     struct VectorPointer : public DataPointer<std::vector<U>> {
+        using value_type = U;
+        using container_type = std::vector<U>*;
+
         const size_t minArgs;
         const size_t maxArgs;
     };
@@ -712,6 +735,7 @@ private:
         const char* usagePrefix = "";
         const char* usageSuffix = "";
         const char* namePrefix = "";
+
         if (!arg.isPositional) {
             namePrefix = "-";
         }            
@@ -719,7 +743,11 @@ private:
             usagePrefix = "["; 
             usageSuffix = "]"; 
         } 
+
+
         if (auto intVariant = std::get_if<IntVariant>(&arg.argument)) {
+            const char* typeString = std::visit([](auto&& a) { return TypeInfo<decltype(a)>::String(); }, *intVariant);
+            ContainerTypes type = std::visit([](auto&& a) { return ContainerInfo<decltype(a)>::Type(); }, *intVariant);
             if (auto arrayPtr = std::get_if<ArrayPointer<int>>(intVariant)) {
                 size_t size = arrayPtr->Size();
                 stringBuilder.AppendAtomic(indent, "%s%s%.*s <int[%zu]>%s", usagePrefix, namePrefix, argNameLen, argNameData, size, usageSuffix);
@@ -755,7 +783,7 @@ private:
         } else if (auto boolVariantPtr = std::get_if<BoolVariant>(&arg.argument)) {
             stringBuilder.AppendAtomic(indent, "%s%s%.*s%s", usagePrefix, namePrefix, argNameLen, argNameData, usageSuffix);
         }
-    };
+    }
 
     inline void ReportError(const char* fmt, va_list vaList) {
         vfprintf(stderr, fmt, vaList);
@@ -946,6 +974,55 @@ template <typename T>
 std::string to_string(T&& t) {
     return detail::as_string(std::forward<T>(t));
 }
+
+template <> struct TypeInfo<int> {
+    static const char* String() { return "int"; }
+};
+template <> struct TypeInfo<float> {
+    static const char* String() { return "int"; }
+};
+template <> struct TypeInfo<double> {
+    static const char* String() { return "int"; }
+};
+template <> struct TypeInfo<bool> {
+    static const char* String() { return ""; } // purposefully blank as bools are flags
+};
+template <> struct TypeInfo<std::string> {
+    static const char* String() { return "string"; }
+};
+template <> struct TypeInfo<std::string_view> {
+    static const char* String() { return "string"; }
+};
+template <typename T> struct TypeInfo {
+    static const char* String() { return TypeInfo<typename std::remove_reference_t<T>::value_type>::String(); }
+};
+template <> struct ContainerInfo<int*> {
+    static ContainerTypes Type() { return ContainerTypes::Pointer; }
+};
+template <> struct ContainerInfo<float*> {
+    static ContainerTypes Type() { return ContainerTypes::Pointer; }
+};
+template <> struct ContainerInfo<double*> {
+    static ContainerTypes Type() { return ContainerTypes::Pointer; }
+};
+template <> struct ContainerInfo<bool*> {
+    static ContainerTypes Type() { return ContainerTypes::None; }
+};
+template <> struct ContainerInfo<std::string*> {
+    static ContainerTypes Type() { return ContainerTypes::None; }
+};
+template <> struct ContainerInfo<std::string_view*> {
+    static ContainerTypes Type() { return ContainerTypes::None; }
+};
+template <typename T> struct ContainerInfo<std::array<T, 0>*> {
+    static ContainerTypes Type() { return ContainerTypes::Array; }
+};
+template <typename T> struct ContainerInfo<std::vector<T>*> {
+    static ContainerTypes Type() { return ContainerTypes::Vector; }
+};
+template <typename T> struct ContainerInfo {
+    static ContainerTypes Type() { return ContainerInfo<typename std::remove_reference_t<T>::container_type>::Type(); }
+};
 
 } // namespace clue
 

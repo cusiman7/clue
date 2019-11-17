@@ -263,26 +263,15 @@ struct CommandLine {
                     if (!ParseArray(t, arrayPtr, ParseInt)) {
                         return {};
                     }
-                } else if (auto vector = std::get_if<Vector<int>>(intVariant)) {
+                } else if (auto vector = std::get_if<VectorPointer<int>>(intVariant)) {
                     // false means don't report errors
                     auto c = ParseVector(t, *vector, argc, &argIndex, ParseInt, false);
                     if (c < vector->minArgs) {
-                        ReportError("\"%.*s\" expected at least %zu arguments but only found %zu\n", argNameLen, argName, vector->minArgs, vector->vec->size());
+                        ReportError("\"%.*s\" expected at least %zu arguments but only found %zu\n", argNameLen, argName, vector->minArgs, vector->Get(t).size());
                         return {};
                     }
                     if (c > vector->maxArgs) {
-                        ReportError("\"%.*s\" expected at most %zu arguments but found %zu\n", argNameLen, argName, vector->maxArgs, vector->vec->size());
-                        return {};
-                    }
-                } else if (auto vectorMember = std::get_if<VectorMember<int>>(intVariant)) {
-                    // false means don't report errors
-                    auto c = ParseVector(t, *vectorMember, argc, &argIndex, ParseInt, false);
-                    if (c < vectorMember->minArgs) {
-                        ReportError("\"%.*s\" expected at least %zu arguments but only found %zu\n", argNameLen, argName, vectorMember->minArgs, (t.*(vectorMember->vec)).size());
-                        return {};
-                    }
-                    if (c > vectorMember->maxArgs) {
-                        ReportError("\"%.*s\" expected at most %zu arguments but fount more\n", argNameLen, argName, vectorMember->maxArgs);
+                        ReportError("\"%.*s\" expected at most %zu arguments but found %zu\n", argNameLen, argName, vector->maxArgs, vector->Get(t).size());
                         return {};
                     }
                 } else {
@@ -478,18 +467,10 @@ struct CommandLine {
                     descriptionBuilder.AppendAtomic(0, "    %s%.*s <int[%zu]>", namePrefix, argNameLen, argNameData, size);
                     
                     ArrayDefault(arrayPtr->Begin(t), size);
-                } else if (std::holds_alternative<Vector<int>>(*intVariant) || std::holds_alternative<VectorMember<int>>(*intVariant)) {
-                    size_t minArgs = 0;
-                    size_t maxArgs = std::numeric_limits<size_t>::max();
-                    if (auto vector = std::get_if<Vector<int>>(intVariant)) {
-                        ArrayDefault(vector->vec->begin(), vector->vec->size());
-                        minArgs = vector->minArgs;
-                        maxArgs = vector->maxArgs; 
-                    } else if (auto vector = std::get_if<VectorMember<int>>(intVariant)) {
-                        ArrayDefault((t.*(vector->vec)).begin(), (t.*(vector->vec)).size());
-                        minArgs = vector->minArgs;
-                        maxArgs = vector->maxArgs;
-                    }
+                } else if (auto vectorPtr = std::get_if<VectorPointer<int>>(intVariant)) {
+                    size_t minArgs = vectorPtr->minArgs;
+                    size_t maxArgs = vectorPtr->maxArgs;
+                    ArrayDefault(vectorPtr->Get(t).begin(), vectorPtr->Get(t).size());
                     if (minArgs != 0 && maxArgs != std::numeric_limits<size_t>::max()) {
                         usageBuilder.AppendAtomic(usageIndent, " %s%s%.*s <int[%zu:%zu]>%s", usagePrefix, namePrefix, argNameLen, argNameData, minArgs, maxArgs, usageSuffix);
                         descriptionIndent = FormattedLength("    %s%.*s <int[%zu:%zu]>", namePrefix, argNameLen, argNameData, minArgs, maxArgs);
@@ -623,9 +604,6 @@ private:
         std::variant<U*, U T::*> v_;
     };
     template <typename U>
-    using ArrayVariant = std::variant<DataPointer<std::array<U, 1>>, DataPointer<std::array<U, 2>>, DataPointer<std::array<U, 3>>, DataPointer<std::array<U, 4>>, DataPointer<std::array<U, 5>>,
-         DataPointer<std::array<U, 6>>, DataPointer<std::array<U, 7>>, DataPointer<std::array<U, 8>>, DataPointer<std::array<U, 9>>, DataPointer<std::array<U, 10>>>;
-    template <typename U>
     struct ArrayPointer {
         template <size_t N>
         ArrayPointer(std::array<U, N>* array) : array_(array) {
@@ -652,28 +630,17 @@ private:
             return std::visit([](const auto array) -> size_t { return std::tuple_size<DataTypeT<decltype(array.Get(T{}))>>::value; }, array_);
         }
 
-        ArrayVariant<U> array_;
+        using ArrayVariant = std::variant<DataPointer<std::array<U, 1>>, DataPointer<std::array<U, 2>>, DataPointer<std::array<U, 3>>, DataPointer<std::array<U, 4>>, DataPointer<std::array<U, 5>>,
+             DataPointer<std::array<U, 6>>, DataPointer<std::array<U, 7>>, DataPointer<std::array<U, 8>>, DataPointer<std::array<U, 9>>, DataPointer<std::array<U, 10>>>;
+        ArrayVariant array_;
     };
     template <typename U>
-    struct Vector {
-        std::vector<U>* Get(T&) const {
-            return vec;
-        }
-        std::vector<U>* vec;
-        const size_t minArgs;
-        const size_t maxArgs;
-    };
-    template <typename U>
-    struct VectorMember{
-        std::vector<U>* Get(T& t) const {
-            return &(t.*vec);
-        }
-        std::vector<U> T::* vec;
+    struct VectorPointer : public DataPointer<std::vector<U>> {
         const size_t minArgs;
         const size_t maxArgs;
     };
 
-    using IntVariant = std::variant<DataPointer<int>, ArrayPointer<int>, Vector<int>, VectorMember<int>>;
+    using IntVariant = std::variant<DataPointer<int>, ArrayPointer<int>, VectorPointer<int>>;
     using FloatVariant = std::variant<DataPointer<float>, DataPointer<double>, ArrayPointer<float>, ArrayPointer<double>>;
     using BoolVariant = std::variant<DataPointer<bool>>;
     using StringVariant = std::variant<DataPointer<std::string_view>, DataPointer<std::string>>;
@@ -699,11 +666,11 @@ private:
     }
     template <size_t MinArgs, size_t MaxArgs, typename U>
     Arg MakeArg(std::vector<U>* vector, std::string_view name, std::string_view description, ParseFlags flags, bool isPositional) {
-        return Arg{Vector<U>{vector, MinArgs, MaxArgs}, name, description, flags, isPositional};
+        return Arg{VectorPointer<U>{vector, MinArgs, MaxArgs}, name, description, flags, isPositional};
     }
     template <size_t MinArgs, size_t MaxArgs, typename U>
     Arg MakeArg(std::vector<U> T::* vector, std::string_view name, std::string_view description, ParseFlags flags, bool isPositional) {
-        return Arg{VectorMember<U>{vector, MinArgs, MaxArgs}, name, description, flags, isPositional};
+        return Arg{VectorPointer<U>{vector, MinArgs, MaxArgs}, name, description, flags, isPositional};
     }
 
     template <typename A, typename ParseFunc, typename ...FuncArgs>
@@ -722,10 +689,10 @@ private:
     }
     
     template <typename Vec, typename ParseFunc, typename ...FuncArgs>
-    size_t ParseVector(T& t, Vec&& vec, int argc, int* argIndex, ParseFunc&& parseFunc, FuncArgs&&... args) {
+    size_t ParseVector(T& t, Vec&& vecPtr, int argc, int* argIndex, ParseFunc&& parseFunc, FuncArgs&&... args) {
         // For vectors we just consume until we can no longer consume any more
-        auto vecPtr = vec.Get(t);
-        vecPtr->clear();
+        auto& vec = vecPtr.Get(t);
+        vec.clear();
         size_t i = 0;
         for (; *argIndex <= argc; ++i) {
             auto v = parseFunc(std::forward<FuncArgs&&>(args)...);
@@ -733,7 +700,7 @@ private:
                 *argIndex -= 1;
                 break;
             }
-            vecPtr->push_back(v.value());
+            vec.push_back(v.value());
         }
         return i;
     }
@@ -756,16 +723,9 @@ private:
             if (auto arrayPtr = std::get_if<ArrayPointer<int>>(intVariant)) {
                 size_t size = arrayPtr->Size();
                 stringBuilder.AppendAtomic(indent, "%s%s%.*s <int[%zu]>%s", usagePrefix, namePrefix, argNameLen, argNameData, size, usageSuffix);
-            } else if (std::holds_alternative<Vector<int>>(*intVariant) || std::holds_alternative<VectorMember<int>>(*intVariant)) {
-                size_t minArgs = 0;
-                size_t maxArgs = std::numeric_limits<size_t>::max();
-                if (auto vector = std::get_if<Vector<int>>(intVariant)) {
-                    minArgs = vector->minArgs;
-                    maxArgs = vector->maxArgs; 
-                } else if (auto vector = std::get_if<VectorMember<int>>(intVariant)) {
-                    minArgs = vector->minArgs;
-                    maxArgs = vector->maxArgs;
-                }
+            } else if (auto vectorPtr = std::get_if<VectorPointer<int>>(intVariant)) {
+                size_t minArgs = vectorPtr->minArgs;
+                size_t maxArgs = vectorPtr->maxArgs;
                 if (minArgs != 0 && maxArgs != std::numeric_limits<size_t>::max()) {
                     stringBuilder.AppendAtomic(indent, "%s%s%.*s <int[%zu:%zu]>%s", usagePrefix, namePrefix, argNameLen, argNameData, minArgs, maxArgs, usageSuffix);
                 } else if (minArgs != 0 && maxArgs == std::numeric_limits<size_t>::max()) {

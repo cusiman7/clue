@@ -105,14 +105,17 @@ template <typename T>
 std::string to_string(T&& t);
 
 template <typename>
-struct JustMember;
-
+struct DataType;
+template <typename T> 
+struct DataType {
+    using type = std::remove_cv_t<std::remove_reference_t<T>>;
+};
 template <typename T, class C> 
-struct JustMember<T C::*> {
-    using type = std::remove_cv_t<std::remove_pointer_t<T>>;
+struct DataType<T C::*> {
+    using type = std::remove_cv_t<std::remove_reference_t<T>>;
 };
 template <typename T>
-using JustMemberT = typename JustMember<T>::type;
+using DataTypeT = typename DataType<T>::type;
 
 template <typename T=std::monostate>
 struct CommandLine {
@@ -256,12 +259,8 @@ struct CommandLine {
                         return {};
                     }
                     intPtr->Get(t) = v.value();
-                } else if (auto arrayPtr = std::get_if<Array<int>>(intVariant)) {
-                    if (!ParseArray(arrayPtr, ParseInt)) {
-                        return {};
-                    }
-                } else if (auto arrayMemberVariant = std::get_if<ArrayMemberVariant<int>>(intVariant)) {
-                    if (!ParseArrayMemberVariant(t, arrayMemberVariant, ParseInt)) {
+                } else if (auto arrayPtr = std::get_if<ArrayPointer<int>>(intVariant)) {
+                    if (!ParseArray(t, arrayPtr, ParseInt)) {
                         return {};
                     }
                 } else if (auto vector = std::get_if<Vector<int>>(intVariant)) {
@@ -339,20 +338,12 @@ struct CommandLine {
                         return {};
                     }
                     doublePtr->Get(t) = v.value();
-                } else if (auto arrayPtr = std::get_if<Array<float>>(floatVariant)) {
-                    if (!ParseArray(arrayPtr, ParseFloat)) {
+                } else if (auto arrayPtr = std::get_if<ArrayPointer<float>>(floatVariant)) {
+                    if (!ParseArray(t, arrayPtr, ParseFloat)) {
                         return {};
                     }
-                } else if (auto arrayPtr = std::get_if<Array<double>>(floatVariant)) {
-                    if (!ParseArray(arrayPtr, ParseDouble)) {
-                        return {};
-                    }
-                } else if (auto arrayMemberVariant = std::get_if<ArrayMemberVariant<float>>(floatVariant)) {
-                    if (!ParseArrayMemberVariant(t, arrayMemberVariant, ParseFloat)) {
-                        return {};
-                    }
-                } else if (auto arrayMemberVariant = std::get_if<ArrayMemberVariant<double>>(floatVariant)) {
-                    if (!ParseArrayMemberVariant(t, arrayMemberVariant, ParseDouble)) {
+                } else if (auto arrayPtr = std::get_if<ArrayPointer<double>>(floatVariant)) {
+                    if (!ParseArray(t, arrayPtr, ParseDouble)) {
                         return {};
                     }
                 } else {
@@ -479,24 +470,14 @@ struct CommandLine {
             } 
 
             if (auto intVariant = std::get_if<IntVariant>(&arg.argument)) {
-                if (auto arrayPtr = std::get_if<Array<int>>(intVariant)) {
-                    size_t size = arrayPtr->end - arrayPtr->begin;
+                if (auto arrayPtr = std::get_if<ArrayPointer<int>>(intVariant)) {
+                    size_t size = arrayPtr->Size();
                     usageBuilder.AppendAtomic(usageIndent, " %s%s%.*s <int[%zu]>%s", usagePrefix, namePrefix, argNameLen, argNameData, size, usageSuffix);
 
                     descriptionIndent = FormattedLength("    %s%.*s <int[%zu]>", namePrefix, argNameLen, argNameData, size);
                     descriptionBuilder.AppendAtomic(0, "    %s%.*s <int[%zu]>", namePrefix, argNameLen, argNameData, size);
                     
-                    ArrayDefault(arrayPtr->begin, size);
-                } else if (auto arrayMemberVariant = std::get_if<ArrayMemberVariant<int>>(intVariant)) {
-                    size_t size = std::visit([&ArrayDefault](auto arrayMember) {
-                        size_t size = (t.*arrayMember).size();
-                        ArrayDefault((t.*arrayMember).begin(), size);
-                        return size;
-                    }, *arrayMemberVariant);
-                    usageBuilder.AppendAtomic(usageIndent, " %s%s%.*s <int[%zu]>%s", usagePrefix, namePrefix, argNameLen, argNameData, size, usageSuffix);
-
-                    descriptionIndent = FormattedLength("    %s%.*s <int[%zu]>", namePrefix, argNameLen, argNameData, size);
-                    descriptionBuilder.AppendAtomic(0, "    %s%.*s <int[%zu]>", namePrefix, argNameLen, argNameData, size);
+                    ArrayDefault(arrayPtr->Begin(t), size);
                 } else if (std::holds_alternative<Vector<int>>(*intVariant) || std::holds_alternative<VectorMember<int>>(*intVariant)) {
                     size_t minArgs = 0;
                     size_t maxArgs = std::numeric_limits<size_t>::max();
@@ -537,40 +518,20 @@ struct CommandLine {
                     }
                 }
             } else if (auto floatVariant = std::get_if<FloatVariant>(&arg.argument)) {
-                if (auto arrayPtr = std::get_if<Array<float>>(floatVariant)) {
-                    size_t size = arrayPtr->end - arrayPtr->begin;
+                if (auto arrayPtr = std::get_if<ArrayPointer<float>>(floatVariant)) {
+                    size_t size = arrayPtr->Size();
                     usageBuilder.AppendAtomic(usageIndent, " %s%s%.*s <float[%zu]>%s", usagePrefix, namePrefix, argNameLen, argNameData, size, usageSuffix);
 
                     descriptionIndent = FormattedLength("   %s%.*s <float[%zu]>", namePrefix, argNameLen, argNameData, size);
                     descriptionBuilder.AppendAtomic(0, "    %s%.*s <float[%zu]>", namePrefix, argNameLen, argNameData, size);
-                    ArrayDefault(arrayPtr->begin, size);
-                } else if (auto arrayPtr = std::get_if<Array<double>>(floatVariant)) {
-                    size_t size = arrayPtr->end - arrayPtr->begin;
+                    ArrayDefault(arrayPtr->Begin(t), size);
+                } else if (auto arrayPtr = std::get_if<ArrayPointer<double>>(floatVariant)) {
+                    size_t size = arrayPtr->Size();
                     usageBuilder.AppendAtomic(usageIndent, " %s%s%.*s <double[%zu]>%s", usagePrefix, namePrefix, argNameLen, argNameData, size, usageSuffix);
                     
                     descriptionIndent = FormattedLength("    %s%.*s <double[%zu]>", namePrefix, argNameLen, argNameData, size);
                     descriptionBuilder.AppendAtomic(0, "    %s%.*s <double[%zu]>", namePrefix, argNameLen, argNameData, size);
-                    ArrayDefault(arrayPtr->begin, size);
-                } else if (auto arrayMemberVariant = std::get_if<ArrayMemberVariant<float>>(floatVariant)) {
-                    size_t size = std::visit([&ArrayDefault](auto arrayMember) {
-                        size_t size = (t.*arrayMember).size();
-                        ArrayDefault((t.*arrayMember).begin(), size);
-                        return size;
-                    }, *arrayMemberVariant);
-                    usageBuilder.AppendAtomic(usageIndent, " %s%s%.*s <float[%zu]>%s", usagePrefix, namePrefix, argNameLen, argNameData, size, usageSuffix);
-                    
-                    descriptionIndent = FormattedLength("    %s%.*s <float[%zu]>", namePrefix, argNameLen, argNameData, size);
-                    descriptionBuilder.AppendAtomic(0, "    %s%.*s <float[%zu]>", namePrefix, argNameLen, argNameData, size);
-                } else if (auto arrayMemberVariant = std::get_if<ArrayMemberVariant<double>>(floatVariant)) {
-                    size_t size = std::visit([&ArrayDefault](auto arrayMember) {
-                        size_t size = (t.*arrayMember).size();
-                        ArrayDefault((t.*arrayMember).begin(), size);
-                        return size;
-                    }, *arrayMemberVariant);
-                    usageBuilder.AppendAtomic(usageIndent, " %s%s%.*s <double[%zu]>%s", usagePrefix, namePrefix, argNameLen, argNameData, size, usageSuffix);
-                    
-                    descriptionIndent = FormattedLength("    %s%.*s <double[%zu]>", namePrefix, argNameLen, argNameData, size);
-                    descriptionBuilder.AppendAtomic(0, "    %s%.*s <double[%zu]>", namePrefix, argNameLen, argNameData, size);
+                    ArrayDefault(arrayPtr->Begin(t), size);
                 } else if (auto floatPtr = std::get_if<DataPointer<float>>(floatVariant)) {
                     usageBuilder.AppendAtomic(usageIndent, " %s%s%.*s <float>%s", usagePrefix, namePrefix, argNameLen, argNameData, usageSuffix);
                     
@@ -662,9 +623,36 @@ private:
         std::variant<U*, U T::*> v_;
     };
     template <typename U>
-    struct Array {
-        U* begin;
-        U* end;
+    using ArrayVariant = std::variant<DataPointer<std::array<U, 1>>, DataPointer<std::array<U, 2>>, DataPointer<std::array<U, 3>>, DataPointer<std::array<U, 4>>, DataPointer<std::array<U, 5>>,
+         DataPointer<std::array<U, 6>>, DataPointer<std::array<U, 7>>, DataPointer<std::array<U, 8>>, DataPointer<std::array<U, 9>>, DataPointer<std::array<U, 10>>>;
+    template <typename U>
+    struct ArrayPointer {
+        template <size_t N>
+        ArrayPointer(std::array<U, N>* array) : array_(array) {
+            static_assert(N >= 1 && N <= 10, "Arrays from sizes 1 to 10 are supported");
+        }
+        template <size_t N>
+        ArrayPointer(std::array<U, N> T::* array) : array_(array) {
+            static_assert(N >= 1 && N <= 10, "Arrays from sizes 1 to 10 are supported");
+        }
+    
+        U* Begin(T& t) {
+            return std::visit([&t](auto array) { return array.Get(t).begin(); }, array_);
+        }
+        const U* Begin(const T& t) const {
+            return std::visit([&t](const auto array) { return array.Get(t).begin(); }, array_);
+        }
+        U* End(T& t) {
+            return std::visit([&t](auto array) { return array.Get(t).end(); }, array_);
+        }
+        const U* End(const T& t) const {
+            return std::visit([&t](const auto array) { return array.Get(t).end(); }, array_);
+        }
+        constexpr size_t Size() const {
+            return std::visit([](const auto array) -> size_t { return std::tuple_size<DataTypeT<decltype(array.Get(T{}))>>::value; }, array_);
+        }
+
+        ArrayVariant<U> array_;
     };
     template <typename U>
     struct Vector {
@@ -685,11 +673,8 @@ private:
         const size_t maxArgs;
     };
 
-    template <typename U>
-    using ArrayMemberVariant = std::variant<std::array<U, 1> T::*, std::array<U, 2> T::*, std::array<U, 3> T::*, std::array<U, 4> T::*, std::array<U, 5> T::*,
-         std::array<U, 6> T::*, std::array<U, 7> T::*, std::array<U, 8> T::*, std::array<U, 9> T::*, std::array<U, 10> T::*>;
-    using IntVariant = std::variant<DataPointer<int>, Array<int>, ArrayMemberVariant<int>, Vector<int>, VectorMember<int>>;
-    using FloatVariant = std::variant<DataPointer<float>, DataPointer<double>, Array<float>, Array<double>, ArrayMemberVariant<float>, ArrayMemberVariant<double>>;
+    using IntVariant = std::variant<DataPointer<int>, ArrayPointer<int>, Vector<int>, VectorMember<int>>;
+    using FloatVariant = std::variant<DataPointer<float>, DataPointer<double>, ArrayPointer<float>, ArrayPointer<double>>;
     using BoolVariant = std::variant<DataPointer<bool>>;
     using StringVariant = std::variant<DataPointer<std::string_view>, DataPointer<std::string>>;
 
@@ -712,10 +697,6 @@ private:
     Arg MakeArg(MemberT T::* member, std::string_view name, std::string_view description, ParseFlags flags, bool isPositional) {
         return Arg{member, name, description, flags, isPositional};
     }
-    template <typename U, size_t N>
-    Arg MakeArg(std::array<U, N>* array, std::string_view name, std::string_view description, ParseFlags flags, bool isPositional) {
-        return Arg{Array<U>{array->begin(), array->end()}, name, description, flags, isPositional};
-    }
     template <size_t MinArgs, size_t MaxArgs, typename U>
     Arg MakeArg(std::vector<U>* vector, std::string_view name, std::string_view description, ParseFlags flags, bool isPositional) {
         return Arg{Vector<U>{vector, MinArgs, MaxArgs}, name, description, flags, isPositional};
@@ -726,9 +707,9 @@ private:
     }
 
     template <typename A, typename ParseFunc, typename ...FuncArgs>
-    bool ParseArray(A&& arrayPtr, ParseFunc&& parseFunc, FuncArgs&&... args) {
-        auto* curr = arrayPtr->begin;
-        auto* end = arrayPtr->end;
+    bool ParseArray(T& t, A&& arrayPtr, ParseFunc&& parseFunc, FuncArgs&&... args) {
+        auto* curr = arrayPtr->Begin(t);
+        auto* end = arrayPtr->End(t);
         while (curr != end) {
             auto v = parseFunc(std::forward<FuncArgs&&>(args)...);
             if (!v) {
@@ -738,23 +719,6 @@ private:
             curr++;
         }
         return true;
-    }
-
-    template <typename AMVP, typename ParseFunc, typename ...FuncArgs> 
-    bool ParseArrayMemberVariant(T& t, AMVP&& arrayMemberVariantPtr, ParseFunc&& parseFunc, FuncArgs&&... args) {
-        return std::visit([&](auto& arrayMember) -> bool {
-            auto* curr = (t.*arrayMember).begin();
-            auto* end = (t.*arrayMember).end();
-            while (curr != end) {
-                auto v = parseFunc(std::forward<FuncArgs&&>(args)...);
-                if (!v) {
-                    return false;
-                }
-                *curr = v.value();
-                curr++;
-            }
-            return true;
-        }, *arrayMemberVariantPtr);
     }
     
     template <typename Vec, typename ParseFunc, typename ...FuncArgs>
@@ -789,13 +753,8 @@ private:
             usageSuffix = "]"; 
         } 
         if (auto intVariant = std::get_if<IntVariant>(&arg.argument)) {
-            if (auto arrayPtr = std::get_if<Array<int>>(intVariant)) {
-                size_t size = arrayPtr->end - arrayPtr->begin;
-                stringBuilder.AppendAtomic(indent, "%s%s%.*s <int[%zu]>%s", usagePrefix, namePrefix, argNameLen, argNameData, size, usageSuffix);
-            } else if (auto arrayMemberVariant = std::get_if<ArrayMemberVariant<int>>(intVariant)) {
-                size_t size = std::visit([](auto arrayMember) {
-                    return std::tuple_size<JustMemberT<decltype(arrayMember)>>::value;
-                }, *arrayMemberVariant);
+            if (auto arrayPtr = std::get_if<ArrayPointer<int>>(intVariant)) {
+                size_t size = arrayPtr->Size();
                 stringBuilder.AppendAtomic(indent, "%s%s%.*s <int[%zu]>%s", usagePrefix, namePrefix, argNameLen, argNameData, size, usageSuffix);
             } else if (std::holds_alternative<Vector<int>>(*intVariant) || std::holds_alternative<VectorMember<int>>(*intVariant)) {
                 size_t minArgs = 0;
@@ -820,21 +779,11 @@ private:
                 stringBuilder.AppendAtomic(indent, "%s%s%.*s <int>%s", usagePrefix, namePrefix, argNameLen, argNameData, usageSuffix);
             }
         } else if (auto floatVariant = std::get_if<FloatVariant>(&arg.argument)) {
-            if (auto arrayPtr = std::get_if<Array<float>>(floatVariant)) {
-                size_t size = arrayPtr->end - arrayPtr->begin;
+            if (auto arrayPtr = std::get_if<ArrayPointer<float>>(floatVariant)) {
+                size_t size = arrayPtr->Size();
                 stringBuilder.AppendAtomic(indent, "%s%s%.*s <float[%zu]>%s", usagePrefix, namePrefix, argNameLen, argNameData, size, usageSuffix);
-            } else if (auto arrayPtr = std::get_if<Array<double>>(floatVariant)) {
-                size_t size = arrayPtr->end - arrayPtr->begin;
-                stringBuilder.AppendAtomic(indent, "%s%s%.*s <double[%zu]>%s", usagePrefix, namePrefix, argNameLen, argNameData, size, usageSuffix);
-            } else if (auto arrayMemberVariant = std::get_if<ArrayMemberVariant<float>>(floatVariant)) {
-                size_t size = std::visit([](auto arrayMember) {
-                    return std::tuple_size<JustMemberT<decltype(arrayMember)>>::value;
-                }, *arrayMemberVariant);
-                stringBuilder.AppendAtomic(indent, "%s%s%.*s <float[%zu]>%s", usagePrefix, namePrefix, argNameLen, argNameData, size, usageSuffix);
-            } else if (auto arrayMemberVariant = std::get_if<ArrayMemberVariant<double>>(floatVariant)) {
-                size_t size = std::visit([](auto arrayMember) {
-                    return std::tuple_size<JustMemberT<decltype(arrayMember)>>::value;
-                }, *arrayMemberVariant);
+            } else if (auto arrayPtr = std::get_if<ArrayPointer<double>>(floatVariant)) {
+                size_t size = arrayPtr->Size();
                 stringBuilder.AppendAtomic(indent, "%s%s%.*s <double[%zu]>%s", usagePrefix, namePrefix, argNameLen, argNameData, size, usageSuffix);
             } else if (std::holds_alternative<DataPointer<float>>(*floatVariant)) {
                 stringBuilder.AppendAtomic(indent, "%s%s%.*s <float>%s", usagePrefix, namePrefix, argNameLen, argNameData, usageSuffix);

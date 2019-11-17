@@ -39,11 +39,12 @@ SOFTWARE.
 #include <cstdlib>
 
 // TODO:
-// vector<type>
 // Enum for "choices" (from_string helper required though?)
 // custom "user" types for the programmer
 // Windows support
 // Better support for aliases and short options 
+// Europe friendliness 10,124
+// Large number friendliness 1,000,000.12
 
 #if defined(__GNUC__) || defined(__clang)
 #define PRINTF_LIKE(a, b) __attribute__((format(printf, (a), (b))))
@@ -61,16 +62,6 @@ enum ParseFlags : uint64_t {
     kNoDefault        = 8,  // Skip outputting defaults. Normal behavior is to print "(Default: <defaults here>)". Can be used for an entire ParseArgs (used with auto-help) or with Optional/Positional for individual args
     kRequired         = 16  // If arg with this flag is not provided by the user, an error will be reported. Applicable to both ParseArgs (meaning all arguments are required) and Optional/Positional (meaning only that arg is required)
 };
-
-template <typename> struct TypeInfo;
-template <typename> struct ContainerInfo;
-enum class ContainerTypes {
-    None,
-    Pointer,
-    Array,
-    Vector
-};
-
 
 struct StringBuilder {
     StringBuilder(int bufSize = 4096);
@@ -129,6 +120,8 @@ using DataTypeT = typename DataType<T>::type;
 
 template<class T> struct AlwaysFalse : std::false_type {};
 
+template <typename> struct TypeInfo;
+
 template <typename T=std::monostate>
 struct CommandLine {
     CommandLine(std::string_view name = "", std::string_view description = "")
@@ -178,6 +171,18 @@ struct CommandLine {
         static_assert(!std::is_same_v<std::remove_pointer_t<U>, bool>, "Positional flags don't make sense. Use Optional for bool types instead");
         static_assert(!std::is_same_v<std::remove_cv_t<U>, bool T::*>, "Positional flags don't make sense. Use Optional for bool types instead");
         positionalArgs_.emplace_back(MakeArg(std::forward<U&&>(valuePtr), name, description, static_cast<ParseFlags>(flags), true));
+    }
+    template <size_t minArgs = 0, size_t maxArgs = std::numeric_limits<size_t>::max(), typename U>
+    void Positional(std::vector<U>* valuePtr, std::string_view name = "", std::string_view description = "", uint64_t flags = kNone) {
+        static_assert(!std::is_same_v<std::remove_pointer_t<U>, bool>, "Positional flags don't make sense. Use Optional for bool types instead");
+        static_assert(!std::is_same_v<std::remove_cv_t<U>, bool T::*>, "Positional flags don't make sense. Use Optional for bool types instead");
+        positionalArgs_.emplace_back(MakeArg<minArgs, maxArgs>(valuePtr, name, description, static_cast<ParseFlags>(flags), true));
+    }
+    template <size_t minArgs = 0, size_t maxArgs = std::numeric_limits<size_t>::max(), typename U>
+    void Positional(std::vector<U> T::* valuePtr, std::string_view name = "", std::string_view description = "", uint64_t flags = kNone) {
+        static_assert(!std::is_same_v<std::remove_pointer_t<U>, bool>, "Positional flags don't make sense. Use Optional for bool types instead");
+        static_assert(!std::is_same_v<std::remove_cv_t<U>, bool T::*>, "Positional flags don't make sense. Use Optional for bool types instead");
+        positionalArgs_.emplace_back(MakeArg<minArgs, maxArgs>(valuePtr, name, description, static_cast<ParseFlags>(flags), true));
     }
 
     // Parse argv, matching args added with Optional and Positional before ParseArgs was called
@@ -308,6 +313,16 @@ struct CommandLine {
                 }
                 return {v};
             };
+            auto ParseStringLike = [this, argc, &argv, &argIndex, &argName, argNameLen](bool reportErrors = true) -> std::optional<const char*> {
+                argIndex++;
+                if (argIndex >= argc) {
+                    if (reportErrors) {
+                        ReportError("\"%.*s\" expected a string value\n", argNameLen, argName);
+                    }
+                    return {};
+                }
+                return {argv[argIndex]};
+            };
             bool success = std::visit([&](auto&& a) -> bool { 
                 using ValueType = typename std::remove_reference_t<decltype(a)>::value_type;
                 using ContainerType = typename std::remove_reference_t<decltype(a)>::container_type;
@@ -315,13 +330,6 @@ struct CommandLine {
                 if constexpr (std::is_same_v<bool, ValueType>) {
                     assert(!positionalArg);
                     a.Get(t) = !a.Get(t);
-                } else if constexpr (std::is_same_v<std::string, ValueType> || std::is_same_v<std::string_view, ValueType>) {
-                    argIndex++;
-                    if (argIndex >= argc) {
-                        ReportError("\"%.*s\" expected a string value\n", argNameLen, argName);
-                        return false;
-                    }
-                    a.Get(t) = argv[argIndex];
                 } else if constexpr (std::is_same_v<ValueType*, ContainerType>) {
                     if constexpr (std::is_same_v<int, ValueType>) {
                         auto v =  ParseInt();
@@ -341,6 +349,14 @@ struct CommandLine {
                             return false;
                         }
                         a.Get(t) = v.value();
+                    } else if constexpr (std::is_same_v<std::string, ValueType> || std::is_same_v<std::string_view, ValueType>) {
+                        auto v = ParseStringLike();
+                        if (!v) {
+                            return false;
+                        }
+                        a.Get(t) = v.value();
+                    } else {
+                        static_assert(AlwaysFalse<ValueType>::value, "Unhandled Argument Type");
                     }
                 } else if constexpr (std::is_same_v<std::array<ValueType, 0>*, ContainerType>) {
                     if constexpr (std::is_same_v<int, ValueType>) {
@@ -355,11 +371,29 @@ struct CommandLine {
                         if (!ParseArray(t, a, ParseDouble)) {
                             return false;
                         }
+                    } else if constexpr (std::is_same_v<std::string, ValueType> || std::is_same_v<std::string_view, ValueType>) {
+                        if (!ParseArray(t, a, ParseStringLike)) {
+                            return false;
+                        }
+                    } else {
+                        static_assert(AlwaysFalse<ValueType>::value, "Unhandled Argument Type");
                     }
                 } else if constexpr (std::is_same_v<std::vector<ValueType>*, ContainerType>) {
                     auto minArgs = a.minArgs;
                     auto maxArgs = a.maxArgs;
-                    auto c = ParseVector(t, a, argc, &argIndex, ParseInt, false);
+                    size_t c = 0;
+                    if constexpr (std::is_same_v<int, ValueType>) {
+                        c = ParseVector(t, a, argc, argv, &argIndex, ParseInt, false);
+                    } else if constexpr (std::is_same_v<float, ValueType>) {
+                        c = ParseVector(t, a, argc, argv, &argIndex, ParseFloat, false);
+                    } else if constexpr (std::is_same_v<double, ValueType>) {
+                        c = ParseVector(t, a, argc, argv, &argIndex, ParseDouble, false);
+                    } else if constexpr (std::is_same_v<std::string, ValueType> || std::is_same_v<std::string_view, ValueType>) {
+                        c = ParseVector(t, a, argc, argv, &argIndex, ParseStringLike, false);
+                    } else {
+                        static_assert(AlwaysFalse<ValueType>::value, "Unhandled Argument Type");
+                    }
+
                     if (c < minArgs) {
                         ReportError("\"%.*s\" expected at least %zu arguments but only found %zu\n", argNameLen, argName, minArgs, a.Get(t).size());
                         return false;
@@ -532,15 +566,12 @@ private:
         const size_t maxArgs;
     };
 
-    using IntVariant = std::variant<DataPointer<int>, ArrayPointer<int>, VectorPointer<int>>;
-    using FloatVariant = std::variant<DataPointer<float>, DataPointer<double>, ArrayPointer<float>, ArrayPointer<double>>;
-    using BoolVariant = std::variant<DataPointer<bool>>;
-    using StringVariant = std::variant<DataPointer<std::string_view>, DataPointer<std::string>>;
-
     using ArgumentVariant = std::variant<DataPointer<int>, ArrayPointer<int>, VectorPointer<int>,
-        DataPointer<float>, DataPointer<double>, ArrayPointer<float>, ArrayPointer<double>,
+        DataPointer<float>, ArrayPointer<float>, VectorPointer<float>, 
+        DataPointer<double>, ArrayPointer<double>, VectorPointer<double>,
         DataPointer<bool>,
-        DataPointer<std::string_view>, DataPointer<std::string>>;
+        DataPointer<std::string_view>, ArrayPointer<std::string_view>, VectorPointer<std::string_view>,
+        DataPointer<std::string>, ArrayPointer<std::string>, VectorPointer<std::string>>;
     
     struct Arg {
         ArgumentVariant argument;
@@ -584,12 +615,29 @@ private:
     }
     
     template <typename Vec, typename ParseFunc, typename ...FuncArgs>
-    size_t ParseVector(T& t, Vec&& vecPtr, int argc, int* argIndex, ParseFunc&& parseFunc, FuncArgs&&... args) {
+    size_t ParseVector(T& t, Vec&& vecPtr, int argc, char** const argv, int* argIndex, ParseFunc&& parseFunc, FuncArgs&&... args) {
         // For vectors we just consume until we can no longer consume any more
         auto& vec = vecPtr.Get(t);
         vec.clear();
         size_t i = 0;
         for (; *argIndex <= argc; ++i) {
+            int nextIndex = (*argIndex) + 1;
+            // Stop consuming if it looks like we're about to step onto a named arg
+            if (nextIndex < argc) {
+                std::string_view token = std::string_view{argv[nextIndex]};
+                if (token.size() >= 1) {
+                    bool looksLikeAnArg = false;
+                    for (const auto& arg : args_) {
+                        if (arg.name == token.substr(1)) {
+                            looksLikeAnArg = true;
+                            break;
+                        }
+                    }
+                    if (looksLikeAnArg) {
+                        break;
+                    }
+                }
+            }
             auto v = parseFunc(std::forward<FuncArgs&&>(args)...);
             if (!v) {
                 *argIndex -= 1;
@@ -650,16 +698,28 @@ private:
         StringBuilder defaultBuilder(64); // used for building strings for default values
 
         std::visit([&](auto&& a) {
-            auto ArrayDefault = [&defaultBuilder](auto arrayBegin, size_t size) {
-                if (size == 0) return;
-                for (size_t i = 0; i < size - 1; ++i) {
-                    defaultBuilder.AppendAtomic("%s ", to_string(arrayBegin[i]).c_str());
-                }
-                defaultBuilder.AppendAtomic("%s", to_string(arrayBegin[size-1]).c_str());
-            };
-
             using ValueType = typename std::remove_reference_t<decltype(a)>::value_type;
             using ContainerType = typename std::remove_reference_t<decltype(a)>::container_type;
+
+            auto ArrayDefault = [&defaultBuilder](auto arrayBegin, size_t size) {
+                if (size == 0) return;
+                if constexpr (std::is_same_v<std::string, ValueType>) {
+                    for (size_t i = 0; i < size - 1; ++i) {
+                        defaultBuilder.AppendAtomic("%s ", arrayBegin[i].c_str());
+                    }
+                    defaultBuilder.AppendAtomic("%s", arrayBegin[size-1].c_str());
+                } else if constexpr (std::is_same_v<std::string_view, ValueType>) {
+                    for (size_t i = 0; i < size - 1; ++i) {
+                        defaultBuilder.AppendAtomic("%.*s ", static_cast<int>(arrayBegin[i].size()), arrayBegin[i].data());
+                    }
+                    defaultBuilder.AppendAtomic("%.*s ", static_cast<int>(arrayBegin[size-1].size()), arrayBegin[size-1].data());
+                } else {
+                    for (size_t i = 0; i < size - 1; ++i) {
+                        defaultBuilder.AppendAtomic("%s ", to_string(arrayBegin[i]).c_str());
+                    }
+                    defaultBuilder.AppendAtomic("%s", to_string(arrayBegin[size-1]).c_str());
+                }
+            };
 
             auto argNameLen = static_cast<int>(arg.name.size());
             auto argNameData = arg.name.data();
@@ -713,7 +773,7 @@ private:
                 if (minArgs != 0 && maxArgs != std::numeric_limits<size_t>::max()) {
                     usageBuilder.AppendAtomic(usageIndent, " %s%s%.*s <%s[%zu:%zu]>%s", usagePrefix, namePrefix, argNameLen, argNameData, typeString, minArgs, maxArgs, usageSuffix);
                     descriptionIndent = FormattedLength("    %s%.*s <%s[%zu:%zu]>", namePrefix, argNameLen, argNameData, typeString, minArgs, maxArgs);
-                    descriptionBuilder.AppendAtomic(0, "    %s%.*s <i%s[%zu:%zu]>", namePrefix, argNameLen, argNameData, typeString, minArgs, maxArgs);
+                    descriptionBuilder.AppendAtomic(0, "    %s%.*s <%s[%zu:%zu]>", namePrefix, argNameLen, argNameData, typeString, minArgs, maxArgs);
                 } else if (minArgs != 0 && maxArgs == std::numeric_limits<size_t>::max()) {
                     usageBuilder.AppendAtomic(usageIndent, " %s%s%.*s <%s[%zu:]>%s", usagePrefix, namePrefix, argNameLen, argNameData, typeString, minArgs, usageSuffix);
                     descriptionIndent = FormattedLength("    %s%.*s <%s[%zu:]>", namePrefix, argNameLen, argNameData, typeString, minArgs);
@@ -942,10 +1002,10 @@ template <> struct TypeInfo<int> {
     static const char* String() { return "int"; }
 };
 template <> struct TypeInfo<float> {
-    static const char* String() { return "int"; }
+    static const char* String() { return "float"; }
 };
 template <> struct TypeInfo<double> {
-    static const char* String() { return "int"; }
+    static const char* String() { return "double"; }
 };
 template <> struct TypeInfo<bool> {
     static const char* String() { return ""; } // purposefully blank as bools are flags
@@ -958,33 +1018,6 @@ template <> struct TypeInfo<std::string_view> {
 };
 template <typename T> struct TypeInfo {
     static const char* String() { return TypeInfo<typename std::remove_reference_t<T>::value_type>::String(); }
-};
-template <> struct ContainerInfo<int*> {
-    static ContainerTypes Type() { return ContainerTypes::Pointer; }
-};
-template <> struct ContainerInfo<float*> {
-    static ContainerTypes Type() { return ContainerTypes::Pointer; }
-};
-template <> struct ContainerInfo<double*> {
-    static ContainerTypes Type() { return ContainerTypes::Pointer; }
-};
-template <> struct ContainerInfo<bool*> {
-    static ContainerTypes Type() { return ContainerTypes::None; }
-};
-template <> struct ContainerInfo<std::string*> {
-    static ContainerTypes Type() { return ContainerTypes::None; }
-};
-template <> struct ContainerInfo<std::string_view*> {
-    static ContainerTypes Type() { return ContainerTypes::None; }
-};
-template <typename T> struct ContainerInfo<std::array<T, 0>*> {
-    static ContainerTypes Type() { return ContainerTypes::Array; }
-};
-template <typename T> struct ContainerInfo<std::vector<T>*> {
-    static ContainerTypes Type() { return ContainerTypes::Vector; }
-};
-template <typename T> struct ContainerInfo {
-    static ContainerTypes Type() { return ContainerInfo<typename std::remove_reference_t<T>::container_type>::Type(); }
 };
 
 } // namespace clue

@@ -11,6 +11,7 @@ struct Args {
     std::array<float, 3> vecf = {1, 2, 3};
     std::array<double, 4> quat = {0, 0, 0, 1};
     std::vector<int> numbers;
+    std::vector<std::string> strings;
 };
 
 int main(int argc, char** argv) {
@@ -24,6 +25,7 @@ int main(int argc, char** argv) {
     std::array<double, 3> vecd = {0, 0, 0};
     std::string_view str_view;
     std::vector<int> numbers;
+    std::vector<std::string> strings;
 
     clue::CommandLine<Args> cl("Features", "This is a test program for testing command line parsing and all the different ways one might want to parse things.\n\n"
                          "Our tenets for CommandLine are:\n"
@@ -40,6 +42,7 @@ int main(int argc, char** argv) {
     cl.Optional(&Args::s, "name", "A name");
     cl.Optional(&Args::sv, "name_view", "Also a name");
     cl.Optional(&Args::numbers, "numbers", "A bunch of numbers");
+    cl.Optional(&Args::strings, "strings", "Build a sentence");
 
     cl.Optional(&hello, "raw_no_hello", "Another way of saying hello, but to a bool, not a member");
     cl.Optional(&i, "raw_int", "Another way of passing an integer, also not a member");
@@ -51,6 +54,7 @@ int main(int argc, char** argv) {
     cl.Optional(&vecd, "raw_vecd", "A 3 double vector");
     cl.Optional(&str_view, "raw_strview", "Another string view to finish it all off");
     cl.Optional(&numbers, "raw_numbers", "A bunch of numbers");
+    cl.Optional(&strings, "raw_strings", "Build a sentence");
 
     auto maybeArgs = cl.ParseArgs(argc, argv);
     if (!maybeArgs) {
@@ -66,12 +70,18 @@ int main(int argc, char** argv) {
     printf("  veci[1] = %d\n", args.veci[1]);
     printf("  s = %s\n", args.s.c_str());
     printf("  sv = %s\n", args.sv.data());
-    printf("  numbers=[");  
+    printf("  numbers = [");
     for (size_t i = 0; i < args.numbers.size(); ++i) {
         const char* fmt = (i == args.numbers.size() - 1) ? "%d" : "%d,";
         printf(fmt, args.numbers[i]);
     }
     printf("]\n");
+
+    printf("  strings = ");
+    for (const auto& s : args.strings) {
+        printf("%s ", s.c_str());
+    }
+    printf("\n");
     
     printf("hello = %s\n", hello ? "true" : "false");
     printf("i = %d\n", i);
@@ -98,6 +108,12 @@ int main(int argc, char** argv) {
         printf(fmt, numbers[i]);
     }
     printf("]\n");
+    
+    printf("raw_strings = ");
+    for (const auto& s : strings) {
+        printf("%s ", s.c_str());
+    }
+    printf("\n");
 
     return 0;
 }

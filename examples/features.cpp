@@ -71,15 +71,15 @@ int main(int argc, char** argv) {
     printf("  s = %s\n", args.s.c_str());
     printf("  sv = %s\n", args.sv.data());
     printf("  numbers = [");
-    for (size_t i = 0; i < args.numbers.size(); ++i) {
-        const char* fmt = (i == args.numbers.size() - 1) ? "%d" : "%d,";
-        printf(fmt, args.numbers[i]);
+    for (size_t j = 0; j < args.numbers.size(); ++j) {
+        const char* fmt = (j == args.numbers.size() - 1) ? "%d" : "%d,";
+        printf(fmt, args.numbers[j]);
     }
     printf("]\n");
 
     printf("  strings = ");
-    for (const auto& s : args.strings) {
-        printf("%s ", s.c_str());
+    for (const auto& str : args.strings) {
+        printf("%s ", str.c_str());
     }
     printf("\n");
     
@@ -89,29 +89,29 @@ int main(int argc, char** argv) {
     printf("d = %f\n", d);
     printf("s = %s\n", s.c_str());
     printf("str_view = %s\n", str_view.data());
-    for (uint32_t i = 0; i < veci.size(); ++i) {
-        printf("  veci[%d] = %d", i, veci[i]);
+    for (uint32_t j = 0; j < veci.size(); ++j) {
+        printf("  veci[%d] = %d", j, veci[j]);
     }
     printf("\n");
-    for (uint32_t i = 0; i < vecf.size(); ++i) {
-        printf("  vecf[%d] = %f", i, vecf[i]);
+    for (uint32_t j = 0; j < vecf.size(); ++j) {
+        printf("  vecf[%d] = %f", j, vecf[j]);
     }
     printf("\n");
-    for (uint32_t i = 0; i < vecd.size(); ++i) {
-        printf("  vecd[%d] = %f", i, vecd[i]);
+    for (uint32_t j = 0; j < vecd.size(); ++j) {
+        printf("  vecd[%d] = %f", j, vecd[j]);
     }
     printf("\n");
 
     printf("raw_numbers=[");  
-    for (size_t i = 0; i < numbers.size(); ++i) {
-        const char* fmt = (i == numbers.size() - 1) ? "%d" : "%d,";
-        printf(fmt, numbers[i]);
+    for (size_t j = 0; j < numbers.size(); ++j) {
+        const char* fmt = (j == numbers.size() - 1) ? "%d" : "%d,";
+        printf(fmt, numbers[j]);
     }
     printf("]\n");
     
     printf("raw_strings = ");
-    for (const auto& s : strings) {
-        printf("%s ", s.c_str());
+    for (const auto& str : strings) {
+        printf("%s ", str.c_str());
     }
     printf("\n");
 

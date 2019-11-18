@@ -8,7 +8,11 @@ function(add_example name)
 add_executable(${name}
   examples/${name}.cpp
 )
-target_compile_options(${name} PRIVATE -Wall -Werror -Wpedantic)
+if(MSVC)
+  target_compile_options(${name} PRIVATE /W4 /WX)
+else()
+  target_compile_options(${name} PRIVATE -Wall -Werror -Wpedantic)
+endif()
 endfunction()
 
 add_example(simple)

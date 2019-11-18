@@ -450,6 +450,7 @@ struct CommandLine {
 
     // Prints the full usage string to stdout
     void PrintUsage(uint64_t flags, int argc = 0, char** const argv = nullptr) const {
+	(void)argc;
         StringBuilder usageBuilder; // For building the first usage lines
         StringBuilder descriptionBuilder; // For building the description line per argument
 
@@ -539,16 +540,16 @@ private:
         }
     
         U* Begin(T& t) {
-            return std::visit([&t](auto array) { return array.Get(t).begin(); }, array_);
+            return std::visit([&t](auto array) { return &array.Get(t).front(); }, array_);
         }
         const U* Begin(const T& t) const {
-            return std::visit([&t](const auto array) { return array.Get(t).begin(); }, array_);
+            return std::visit([&t](const auto array) { return &array.Get(t).front(); }, array_);
         }
         U* End(T& t) {
-            return std::visit([&t](auto array) { return array.Get(t).end(); }, array_);
+            return std::visit([&t](auto array) { return &array.Get(t).back(); }, array_);
         }
         const U* End(const T& t) const {
-            return std::visit([&t](const auto array) { return array.Get(t).end(); }, array_);
+            return std::visit([&t](const auto array) { return &array.Get(t).back(); }, array_);
         }
         constexpr size_t Size() const {
             return std::visit([](const auto array) -> size_t { return std::tuple_size<DataTypeT<decltype(array.Get(T{}))>>::value; }, array_);
@@ -806,7 +807,7 @@ private:
         } else {
             descriptionBuilder.AppendAtomic(": ");
         }
-        descriptionBuilder.AppendNatural(descriptionIndent, arg.description.data(), arg.description.size());
+        descriptionBuilder.AppendNatural(descriptionIndent, arg.description.data(), static_cast<int>(arg.description.size()));
 
         if (!(flags & kNoDefault) && !(arg.flags & kNoDefault)) {
             auto sv = defaultBuilder.GetStringView();

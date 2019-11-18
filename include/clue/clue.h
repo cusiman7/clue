@@ -33,8 +33,10 @@ SOFTWARE.
 #include <variant>
 #include <vector>
 
+#include <cassert>
 #include <cmath>
 #include <cstdarg>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 

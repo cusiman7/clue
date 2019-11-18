@@ -10,7 +10,7 @@ jobs:
     - name: cmake
       run: cmake .
     - name: make
-      run: make
+      run: make -j2
   build-macos:
     runs-on: macOS-latest
     steps:
@@ -18,12 +18,12 @@ jobs:
     - name: cmake
       run: cmake .
     - name: make
-      run: make
+      run: make -j2
   build-windows:
     runs-on: windows-latest
     steps:
     - uses: actions/checkout@v1
     - name: cmake
-      run: cmake .
+      run: cmake -G "Unix Makefiles" .
     - name: make
-      run: make
+      run: make -j2

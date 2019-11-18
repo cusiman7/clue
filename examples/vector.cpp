@@ -1,5 +1,4 @@
 
-#include <string_view>
 #include <iostream>
 #include <clue/clue.h>
 
@@ -24,7 +23,7 @@ void PrintVector(const std::vector<T>& v, std::string_view name) {
 }
 
 int main(int argc, char** argv) {
-    clue::CommandLine<Args> cl("", "Print a message count times.");
+    clue::CommandLine<Args> cl("vector example", "");
     
     cl.Optional(&Args::unlimited, "unlimited", "An unlimited number of arguments");
     cl.Optional<3>(&Args::atLeastThree, "atLeastThree", "At least 3 arguments");

@@ -261,7 +261,7 @@ struct CommandLine {
                         ReportError("\"%.*s\" expected a string representing an int but instead found \"%.*s\"\n", argNameLen, argName, valueTokenLen, valueTokenData);
                     }
                     return {};
-                } else if (v == LONG_MAX || v == LONG_MIN || v < std::numeric_limits<int>::min() || v > std::numeric_limits<int>::max()) {
+                } else if (v < std::numeric_limits<int>::min() || v > std::numeric_limits<int>::max()) {
                     if (reportErrors) {
                         ReportError("\"%.*s\" int value \"%.*s\" out of range [%d, %d]\n",
                         argNameLen, argName, valueTokenLen, valueTokenData, std::numeric_limits<int>::min(), std::numeric_limits<int>::max());

@@ -1,5 +1,7 @@
 # C.L.U.E. Command Line User Experience
 
+![](https://github.com/cusiman7/clue/workflows/C/C++%20CI/badge.svg)
+
 Clue is an easy to use C++ 17 command line parser for programmers and their command line users.
 
 ## A Simple Example

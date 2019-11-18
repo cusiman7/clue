@@ -669,17 +669,19 @@ private:
                 usagePrefix = "["; 
                 usageSuffix = "]"; 
             } 
-            const char* typeString = std::visit([](auto&& a) { return TypeInfo<decltype(a)>::String(); }, arg.argument);
             if constexpr (std::is_same_v<bool, ValueType>) {
                 stringBuilder.AppendAtomic(indent, "%s%s%.*s%s", usagePrefix, namePrefix, argNameLen, argNameData, usageSuffix);
             } else if constexpr (std::is_same_v<ValueType*, ContainerType>) {
+                const char* typeString = std::visit([](auto&& a) { return TypeInfo<decltype(a)>::String(); }, arg.argument);
                 stringBuilder.AppendAtomic(indent, "%s%s%.*s <%s>%s", usagePrefix, namePrefix, argNameLen, argNameData, typeString, usageSuffix);
             } else if constexpr (std::is_same_v<std::array<ValueType, 0>*, ContainerType>) {
                 auto size = a.Size();
+                const char* typeString = std::visit([](auto&& a) { return TypeInfo<decltype(a)>::String(); }, arg.argument);
                 stringBuilder.AppendAtomic(indent, "%s%s%.*s <%s[%zu]>%s", usagePrefix, namePrefix, argNameLen, argNameData, typeString, size, usageSuffix);
             } else if constexpr (std::is_same_v<std::vector<ValueType>*, ContainerType>) {
                 auto minArgs = a.minArgs;
                 auto maxArgs = a.maxArgs;
+                const char* typeString = std::visit([](auto&& a) { return TypeInfo<decltype(a)>::String(); }, arg.argument);
                 if (minArgs != 0 && maxArgs != std::numeric_limits<size_t>::max()) {
                     stringBuilder.AppendAtomic(indent, "%s%s%.*s <%s[%zu:%zu]>%s", usagePrefix, namePrefix, argNameLen, argNameData, typeString, minArgs, maxArgs, usageSuffix);
                 } else if (minArgs != 0 && maxArgs == std::numeric_limits<size_t>::max()) {
@@ -729,7 +731,6 @@ private:
             const char* usagePrefix = "";
             const char* usageSuffix = "";
             const char* namePrefix = "";
-            const char* typeString = std::visit([](auto&& a) { return TypeInfo<decltype(a)>::String(); }, arg.argument);
 
             if (!arg.isPositional) {
                 namePrefix = "-";
@@ -740,6 +741,7 @@ private:
             }
 
             if constexpr (std::is_same_v<bool, ValueType>) {
+                (void)ArrayDefault;
                 usageBuilder.AppendAtomic(usageIndent, " %s%s%.*s%s", usagePrefix, namePrefix, argNameLen, argNameData, usageSuffix);
 
                 descriptionIndent = FormattedLength("    %s%.*s", namePrefix, argNameLen, argNameData);
@@ -747,6 +749,8 @@ private:
 
                 defaultBuilder.AppendAtomic("%s", a.Get(t) ? "true" : "false");
             } else if constexpr (std::is_same_v<ValueType*, ContainerType>) {
+                (void)ArrayDefault;
+                const char* typeString = std::visit([](auto&& a) { return TypeInfo<decltype(a)>::String(); }, arg.argument);
                 usageBuilder.AppendAtomic(usageIndent, " %s%s%.*s <%s>%s", usagePrefix, namePrefix, argNameLen, argNameData, typeString, usageSuffix);
 
                 descriptionIndent = FormattedLength("    %s%.*s <%s>", namePrefix, argNameLen, argNameData, typeString);
@@ -760,6 +764,7 @@ private:
                     defaultBuilder.AppendAtomic("%s", to_string(a.Get(t)).c_str());
                 }
             } else if constexpr (std::is_same_v<std::array<ValueType, 0>*, ContainerType>) {
+                const char* typeString = std::visit([](auto&& a) { return TypeInfo<decltype(a)>::String(); }, arg.argument);
                 auto size = a.Size();
                 usageBuilder.AppendAtomic(usageIndent, " %s%s%.*s <%s[%zu]>%s", usagePrefix, namePrefix, argNameLen, argNameData, typeString, size, usageSuffix);
 
@@ -768,6 +773,7 @@ private:
                 
                 ArrayDefault(a.Begin(t), size);
             } else if constexpr (std::is_same_v<std::vector<ValueType>*, ContainerType>) {
+                const char* typeString = std::visit([](auto&& a) { return TypeInfo<decltype(a)>::String(); }, arg.argument);
                 auto minArgs = a.minArgs;
                 auto maxArgs = a.maxArgs;
                 ArrayDefault(a.Get(t).begin(), a.Get(t).size());
@@ -933,7 +939,7 @@ std::string_view StringBuilder::GetStringView() const {
 void StringBuilder::Clear() {
     i_ = 0;
     lineLen_ = 0; 
-};
+}
 
 void StringBuilder::Grow(int newSize) {
     bufSize_ = std::max(bufSize_*2, newSize);

@@ -25,7 +25,6 @@ SOFTWARE.
 #pragma once
 
 #include <array>
-#include <charconv>
 #include <limits>
 #include <optional>
 #include <string>
@@ -34,6 +33,7 @@ SOFTWARE.
 #include <variant>
 #include <vector>
 
+#include <cmath>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
@@ -252,14 +252,14 @@ struct CommandLine {
                 auto valueToken = std::string_view(argv[argIndex]);
                 auto valueTokenData = valueToken.data();
                 auto valueTokenLen = static_cast<int>(valueToken.size());
-                int v;
-                auto result = std::from_chars(valueTokenData, valueTokenData+valueTokenLen, v);
-                if (result.ec == std::errc::invalid_argument) {
+                char* end = nullptr;
+                long v = strtol(valueTokenData, &end, 10);
+                if (v == 0 && end == valueTokenData) {
                     if (reportErrors) {
                         ReportError("\"%.*s\" expected a string representing an int but instead found \"%.*s\"\n", argNameLen, argName, valueTokenLen, valueTokenData);
                     }
                     return {};
-                } else if (result.ec == std::errc::result_out_of_range) {
+                } else if (v == LONG_MAX || v == LONG_MIN || v < std::numeric_limits<int>::min() || v > std::numeric_limits<int>::max()) {
                     if (reportErrors) {
                         ReportError("\"%.*s\" int value \"%.*s\" out of range [%d, %d]\n",
                         argNameLen, argName, valueTokenLen, valueTokenData, std::numeric_limits<int>::min(), std::numeric_limits<int>::max());

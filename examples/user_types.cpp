@@ -9,8 +9,8 @@ struct Vec3 {
 };
 
 struct Repeat {
-    int i = 3;
     std::string_view phrase = "Hello Clue!";
+    int i = 3;
 };
 
 struct Args {
@@ -20,7 +20,7 @@ struct Args {
 
 using CommandLine = clue::CommandLine<Args, 
     Vec3(float, float, float),
-    Repeat(int, std::string_view)>;
+    Repeat(std::string_view, int)>;
 
 int main(int argc, char** argv) {
     CommandLine cl("User Types");

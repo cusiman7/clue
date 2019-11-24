@@ -67,7 +67,9 @@ int main(int argc, char** argv) {
     printf("  i = %d\n", args.i);
     printf("  f = %f\n", args.f);
     printf("  d = %f\n", args.d);
+    printf("  veci[0] = %d\n", args.veci[0]);
     printf("  veci[1] = %d\n", args.veci[1]);
+    printf("  veci[2] = %d\n", args.veci[2]);
     printf("  s = %s\n", args.s.c_str());
     printf("  sv = %s\n", args.sv.data());
     printf("  numbers = [");

@@ -64,6 +64,29 @@ enum ParseFlags : uint64_t {
     kRequired         = 16  // If arg with this flag is not provided by the user, an error will be reported. Applicable to both ParseArgs (meaning all arguments are required) and Optional/Positional (meaning only that arg is required)
 };
 
+inline void ReportError(const char* fmt, va_list vaList) {
+    vfprintf(stderr, fmt, vaList);
+}
+
+PRINTF_LIKE(1, 2)
+inline void ReportError(const char* fmt, ...) {
+    va_list vaList;
+    va_start(vaList, fmt);
+    ReportError(fmt, vaList);
+    va_end(vaList);
+}
+
+PRINTF_LIKE(2, 3)
+inline void Assert(bool assertion, const char* fmt, ...) {
+    if (!assertion) {
+        va_list vaList;
+        va_start(vaList, fmt);
+        ReportError(fmt, vaList);
+        va_end(vaList);
+        std::exit(-1);
+    }
+}
+
 struct StringBuilder {
     StringBuilder(int bufSize = 4096);
     ~StringBuilder();
@@ -124,6 +147,18 @@ template<class T> struct AlwaysFalse : std::false_type {};
 template <typename> struct TypeInfo;
 
 struct UserContainer {}; 
+
+struct ParseState {
+    int argc;
+    char** argv;
+    int* argIndex;
+    const char* argName;
+    int argNameLen;
+    bool reportErrors;
+};
+
+template <typename U>
+std::optional<U> Parse(ParseState state);
 
 template <typename T=std::monostate, typename ...UserTypes>
 struct CommandLine {
@@ -188,24 +223,11 @@ struct CommandLine {
         positionalArgs_.emplace_back(MakeArg<minArgs, maxArgs>(valuePtr, name, description, static_cast<ParseFlags>(flags), true));
     }
 
-    struct ParseState {
-        int argc;
-        char** argv;
-        int* argIndex;
-        const char* argName;
-        int argNameLen;
-        bool reportErrors;
-    };
-
-    template <typename U>
-    std::optional<U> Parse(ParseState state);
-    
     // Parse argv, matching args added with Optional and Positional before ParseArgs was called
     // On success returns a std::opitonal<T> with a newly constructed T filled in with options
     // On failure calls std::exit(1) unless the flag NoExitOnError is passesd where an empty std::optional is returned
     //    Note: If there are valid arguments after the failed argument that could have been parsed into T, they will have been skipped
     std::optional<T> ParseArgs(const int argc, char** const argv, uint64_t flags = kNone) {
-        currentFlags_ = static_cast<ParseFlags>(flags);
         size_t currentPositionalArg = 0;
         T t;
 
@@ -214,7 +236,7 @@ struct CommandLine {
             auto tokenLen = static_cast<int>(token.size());
             
             if (!(flags & kNoAutoHelp) && (token == "-h" ||  token == "-help" || token == "--help" || token == "/?")) {
-                PrintUsage(currentFlags_, argc, argv);
+                PrintUsage(flags, argc, argv);
                 std::exit(1);
             }
 
@@ -240,6 +262,9 @@ struct CommandLine {
             if (!argPtr) {
                 if (!(flags & kSkipUnrecognized)) {
                     ReportError("Unrecognized argument \"%.*s\"\n", tokenLen, token.data());
+                    if (!(flags & kNoExitOnError)) {
+                        std::exit(1);
+                    }
                     return {};
                 } else {
                     continue;
@@ -294,7 +319,7 @@ struct CommandLine {
                         return false;
                     }
                 } else if constexpr (std::is_same_v<UserContainer, ContainerType>) {
-                    bool res = ParseUserType(t, a, parseState);
+                    bool res = a.Parse(t, parseState);
                     if (!res) {
                         return false;
                     }
@@ -306,6 +331,9 @@ struct CommandLine {
             }, arg.argument);
             
             if (!success) {
+                if (!(flags & kNoExitOnError)) {
+                    std::exit(1);
+                }
                 return {};
             }
         } // end for loop
@@ -316,25 +344,28 @@ struct CommandLine {
         sb.AppendAtomic("Missing required arguments:");
         sb.NewLine(2);
         for(const auto& arg : positionalArgs_) {
-            if ((currentFlags_ & kRequired || arg.flags & kRequired) && !arg.wasSet) {
+            if ((flags & kRequired || arg.flags & kRequired) && !arg.wasSet) {
                 missingSomething = true;
                 sb.AppendChar(' ', 4);
-                AppendNameAndType(arg, sb, 0, currentFlags_);
+                AppendNameAndType(arg, sb, 0, flags);
                 sb.NewLine();
             }
         }
         for(const auto& arg : args_) {
-            if ((currentFlags_ & kRequired || arg.flags & kRequired) && !arg.wasSet) {
+            if ((flags & kRequired || arg.flags & kRequired) && !arg.wasSet) {
                 missingSomething = true;
                 sb.AppendChar(' ', 4);
-                AppendNameAndType(arg, sb, 0, currentFlags_);
+                AppendNameAndType(arg, sb, 0, flags);
                 sb.NewLine();
             }
         }
         if (missingSomething) {
-            PrintUsage(currentFlags_);
+            PrintUsage(flags);
             auto sv = sb.GetStringView();
             ReportError("%.*s\n", static_cast<int>(sv.size()), sv.data());
+            if (!(flags & kNoExitOnError)) {
+                std::exit(1);
+            }
         }
 
         return {t};
@@ -448,10 +479,10 @@ private:
             return std::visit([&t](const auto array) { return &array.Get(t).front(); }, array_);
         }
         U* End(T& t) {
-            return std::visit([&t](auto array) { return &array.Get(t).back(); }, array_);
+            return std::visit([&t](auto array) { return &array.Get(t).back()+1; }, array_);
         }
         const U* End(const T& t) const {
-            return std::visit([&t](const auto array) { return &array.Get(t).back(); }, array_);
+            return std::visit([&t](const auto array) { return &array.Get(t).back()+1; }, array_);
         }
         constexpr size_t Size() const {
             return std::visit([](const auto array) -> size_t { return std::tuple_size<DataTypeT<decltype(array.Get(T{}))>>::value; }, array_);
@@ -483,9 +514,8 @@ private:
         UserPointer(U* v) : DataPointer<U>(v) {};
         UserPointer(U T::* v) : DataPointer<U>(v) {};
 
-        template <typename CommandLineT>
-        bool Parse(CommandLineT&& cl, T& t, ParseState state) {
-            auto parseResults = std::make_tuple(cl.template Parse<Args>(state)...);
+        bool Parse(T& t, ParseState state) {
+            auto parseResults = std::make_tuple(::clue::Parse<Args>(state)...);
             return std::apply([this, &t](auto&&... optionals) {
                 bool hasValues = (optionals.has_value() && ...);
                 if (!hasValues) {
@@ -541,106 +571,6 @@ private:
     Arg MakeArg(std::vector<U> T::* vector, std::string_view name, std::string_view description, ParseFlags flags, bool isPositional) {
         return Arg{VectorPointer<U>{vector, MinArgs, MaxArgs}, name, description, flags, isPositional};
     }
-    
-    template <>
-    std::optional<int> Parse<int>(ParseState state) {
-        (*state.argIndex)++;
-        if (*state.argIndex >= state.argc) {
-            if (state.reportErrors) {
-                ReportError("\"%.*s\" expected an int value\n", state.argNameLen, state.argName);
-            }
-            return {};
-        }
-        auto valueToken = std::string_view(state.argv[*state.argIndex]);
-        auto valueTokenData = valueToken.data();
-        auto valueTokenLen = static_cast<int>(valueToken.size());
-        char* end = nullptr;
-        int64_t v = strtol(valueTokenData, &end, 10);
-        if (v == 0 && end == valueTokenData) {
-            if (state.reportErrors) {
-                ReportError("\"%.*s\" expected a string representing an int but instead found \"%.*s\"\n", state.argNameLen, state.argName, valueTokenLen, valueTokenData);
-            }
-            return {};
-        } else if (v < static_cast<int64_t>(std::numeric_limits<int>::min()) || v > static_cast<int64_t>(std::numeric_limits<int>::max())) {
-            if (state.reportErrors) {
-                ReportError("\"%.*s\" int value \"%.*s\" out of range [%d, %d]\n",
-                state.argNameLen, state.argName, valueTokenLen, valueTokenData, std::numeric_limits<int>::min(), std::numeric_limits<int>::max());
-            }
-            return {};
-        }
-        return {static_cast<int>(v)};
-    }
-
-    template <>
-    std::optional<float> Parse(ParseState state) {
-        (*state.argIndex)++;
-        if (*state.argIndex >= state.argc) {
-            if (state.reportErrors) {
-                ReportError("\"%.*s\" expected a float value\n", state.argNameLen, state.argName);
-            }
-            return {};
-        }
-        auto valueToken = std::string_view(state.argv[*state.argIndex]);
-        auto valueTokenData = valueToken.data();
-        auto valueTokenLen = static_cast<int>(valueToken.size());
-        
-        float v = strtof(valueTokenData, nullptr);
-        // TODO: 0 could be from garbage strings!
-        if (v == HUGE_VAL || v == HUGE_VALF || v == HUGE_VALL) {
-            if (state.reportErrors) {
-                ReportError("\"%.*s\" float value \"%.*s\" out of range\n", state.argNameLen, state.argName, valueTokenLen, valueTokenData);
-            }
-            return {};
-        }
-        return {v};
-    };
-
-    template <>
-    std::optional<double> Parse(ParseState state) {
-        (*state.argIndex)++;
-        if (*state.argIndex >= state.argc) {
-            if (state.reportErrors) {
-                ReportError("\"%.*s\" expected a double value\n", state.argNameLen, state.argName);
-            }
-            return {};
-        }
-        auto valueToken = std::string_view(state.argv[*state.argIndex]);
-        auto valueTokenData = valueToken.data();
-        auto valueTokenLen = static_cast<int>(valueToken.size());
-        
-        double v = strtod(valueToken.data(), nullptr);
-        if (v == HUGE_VAL || v == HUGE_VALF || v == HUGE_VALL) {
-            if (state.reportErrors) {
-                ReportError("\"%.*s\" double value \"%.*s\" out of range\n", state.argNameLen, state.argName, valueTokenLen, valueTokenData);
-            }
-            return {};
-        }
-        return {v};
-    };
-
-    template <>
-    std::optional<std::string> Parse(ParseState state) {
-        (*state.argIndex)++;
-        if (*state.argIndex >= state.argc) {
-            if (state.reportErrors) {
-                ReportError("\"%.*s\" expected a string value\n", state.argNameLen, state.argName);
-            }
-            return {};
-        }
-        return {state.argv[*state.argIndex]};
-    };
-
-    template <>
-    std::optional<std::string_view> Parse(ParseState state) {
-        (*state.argIndex)++;
-        if (*state.argIndex >= state.argc) {
-            if (state.reportErrors) {
-                ReportError("\"%.*s\" expected a string value\n", state.argNameLen, state.argName);
-            }
-            return {};
-        }
-        return {state.argv[*state.argIndex]};
-    };
 
     template <typename A>
     bool ParseArray(T& t, A&& arrayPtr, ParseState state) {
@@ -692,12 +622,7 @@ private:
         return i;
     }
 
-    template <typename UserPointerT>
-    bool ParseUserType(T& t, UserPointerT&& userPointer, ParseState state) {
-        return userPointer.Parse(*this, t, state);
-    };
-
-    void AppendNameAndType(const Arg& arg, StringBuilder& stringBuilder, int indent, ParseFlags flags) {
+    void AppendNameAndType(const Arg& arg, StringBuilder& stringBuilder, int indent, uint64_t flags) {
         std::visit([&](auto&& a) { 
             using ValueType = typename std::remove_reference_t<decltype(a)>::value_type;
             using ContainerType = typename std::remove_reference_t<decltype(a)>::container_type;
@@ -880,38 +805,111 @@ private:
         descriptionBuilder.NewLine(2);
     }
 
-    inline void ReportError(const char* fmt, va_list vaList) {
-        vfprintf(stderr, fmt, vaList);
-        if (!(currentFlags_ & kNoExitOnError)) {
-            std::exit(1);
-        }
-    }
-
-    PRINTF_LIKE(2, 3)
-    inline void ReportError(const char* fmt, ...) {
-        va_list vaList;
-        va_start(vaList, fmt);
-        ReportError(fmt, vaList);
-        va_end(vaList);
-    }
-
-    PRINTF_LIKE(3, 4)
-    inline void Assert(bool assertion, const char* fmt, ...) {
-        if (!assertion) {
-            va_list vaList;
-            va_start(vaList, fmt);
-            ReportError(fmt, vaList);
-            va_end(vaList);
-            std::exit(-1);
-        }
-    }
-
     std::string_view name_;
     std::string_view description_;
     std::vector<Arg> args_;
     std::vector<Arg> positionalArgs_;
-    ParseFlags currentFlags_ = kNone;
 };
+    
+template <>
+std::optional<int> Parse<int>(ParseState state) {
+    (*state.argIndex)++;
+    if (*state.argIndex >= state.argc) {
+        if (state.reportErrors) {
+            ReportError("\"%.*s\" expected an int value\n", state.argNameLen, state.argName);
+        }
+        return {};
+    }
+    auto valueToken = std::string_view(state.argv[*state.argIndex]);
+    auto valueTokenData = valueToken.data();
+    auto valueTokenLen = static_cast<int>(valueToken.size());
+    char* end = nullptr;
+    int64_t v = strtol(valueTokenData, &end, 10);
+    if (v == 0 && end == valueTokenData) {
+        if (state.reportErrors) {
+            ReportError("\"%.*s\" expected a string representing an int but instead found \"%.*s\"\n", state.argNameLen, state.argName, valueTokenLen, valueTokenData);
+        }
+        return {};
+    } else if (v < static_cast<int64_t>(std::numeric_limits<int>::min()) || v > static_cast<int64_t>(std::numeric_limits<int>::max())) {
+        if (state.reportErrors) {
+            ReportError("\"%.*s\" int value \"%.*s\" out of range [%d, %d]\n",
+            state.argNameLen, state.argName, valueTokenLen, valueTokenData, std::numeric_limits<int>::min(), std::numeric_limits<int>::max());
+        }
+        return {};
+    }
+    return {static_cast<int>(v)};
+}
+
+template <>
+std::optional<float> Parse<float>(ParseState state) {
+    (*state.argIndex)++;
+    if (*state.argIndex >= state.argc) {
+        if (state.reportErrors) {
+            ReportError("\"%.*s\" expected a float value\n", state.argNameLen, state.argName);
+        }
+        return {};
+    }
+    auto valueToken = std::string_view(state.argv[*state.argIndex]);
+    auto valueTokenData = valueToken.data();
+    auto valueTokenLen = static_cast<int>(valueToken.size());
+    
+    float v = strtof(valueTokenData, nullptr);
+    // TODO: 0 could be from garbage strings!
+    if (v == HUGE_VAL || v == HUGE_VALF || v == HUGE_VALL) {
+        if (state.reportErrors) {
+            ReportError("\"%.*s\" float value \"%.*s\" out of range\n", state.argNameLen, state.argName, valueTokenLen, valueTokenData);
+        }
+        return {};
+    }
+    return {v};
+}
+
+template <>
+std::optional<double> Parse<double>(ParseState state) {
+    (*state.argIndex)++;
+    if (*state.argIndex >= state.argc) {
+        if (state.reportErrors) {
+            ReportError("\"%.*s\" expected a double value\n", state.argNameLen, state.argName);
+        }
+        return {};
+    }
+    auto valueToken = std::string_view(state.argv[*state.argIndex]);
+    auto valueTokenData = valueToken.data();
+    auto valueTokenLen = static_cast<int>(valueToken.size());
+    
+    double v = strtod(valueToken.data(), nullptr);
+    if (v == HUGE_VAL || v == HUGE_VALF || v == HUGE_VALL) {
+        if (state.reportErrors) {
+            ReportError("\"%.*s\" double value \"%.*s\" out of range\n", state.argNameLen, state.argName, valueTokenLen, valueTokenData);
+        }
+        return {};
+    }
+    return {v};
+}
+
+template <>
+std::optional<std::string> Parse<std::string>(ParseState state) {
+    (*state.argIndex)++;
+    if (*state.argIndex >= state.argc) {
+        if (state.reportErrors) {
+            ReportError("\"%.*s\" expected a string value\n", state.argNameLen, state.argName);
+        }
+        return {};
+    }
+    return {state.argv[*state.argIndex]};
+}
+
+template <>
+std::optional<std::string_view> Parse<std::string_view>(ParseState state) {
+    (*state.argIndex)++;
+    if (*state.argIndex >= state.argc) {
+        if (state.reportErrors) {
+            ReportError("\"%.*s\" expected a string value\n", state.argNameLen, state.argName);
+        }
+        return {};
+    }
+    return {state.argv[*state.argIndex]};
+}
 
 StringBuilder::StringBuilder(int bufSize) {
     Grow(bufSize);

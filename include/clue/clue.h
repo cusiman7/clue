@@ -41,9 +41,8 @@ SOFTWARE.
 #include <cstdlib>
 
 // TODO:
-// Enum for "choices" (from_string helper required though?)
 // custom "user" types for the programmer
-// Windows support
+// Enum for "choices" (from_string helper required though?)
 // Better support for aliases and short options 
 // Europe friendliness 10,12456
 // Large number friendliness 1,000,000.12
@@ -124,7 +123,9 @@ template<class T> struct AlwaysFalse : std::false_type {};
 
 template <typename> struct TypeInfo;
 
-template <typename T=std::monostate>
+struct UserContainer {}; 
+
+template <typename T=std::monostate, typename ...UserTypes>
 struct CommandLine {
     CommandLine(std::string_view name = "", std::string_view description = "")
     : name_(name), description_(description) {
@@ -187,6 +188,18 @@ struct CommandLine {
         positionalArgs_.emplace_back(MakeArg<minArgs, maxArgs>(valuePtr, name, description, static_cast<ParseFlags>(flags), true));
     }
 
+    struct ParseState {
+        int argc;
+        char** argv;
+        int* argIndex;
+        const char* argName;
+        int argNameLen;
+        bool reportErrors;
+    };
+
+    template <typename U>
+    std::optional<U> Parse(ParseState state);
+    
     // Parse argv, matching args added with Optional and Positional before ParseArgs was called
     // On success returns a std::opitonal<T> with a newly constructed T filled in with options
     // On failure calls std::exit(1) unless the flag NoExitOnError is passesd where an empty std::optional is returned
@@ -243,88 +256,14 @@ struct CommandLine {
                 argIndex--;
             }
 
-            auto ParseInt = [this, argc, &argv, &argIndex, &argName, argNameLen](bool reportErrors = true) -> std::optional<int> {
-                argIndex++;
-                if (argIndex >= argc) {
-                    if (reportErrors) {
-                        ReportError("\"%.*s\" expected an int value\n", argNameLen, argName);
-                    }
-                    return {};
-                }
-                auto valueToken = std::string_view(argv[argIndex]);
-                auto valueTokenData = valueToken.data();
-                auto valueTokenLen = static_cast<int>(valueToken.size());
-                char* end = nullptr;
-                long v = strtol(valueTokenData, &end, 10);
-                if (v == 0 && end == valueTokenData) {
-                    if (reportErrors) {
-                        ReportError("\"%.*s\" expected a string representing an int but instead found \"%.*s\"\n", argNameLen, argName, valueTokenLen, valueTokenData);
-                    }
-                    return {};
-                } else if (v < std::numeric_limits<int>::min() || v > std::numeric_limits<int>::max()) {
-                    if (reportErrors) {
-                        ReportError("\"%.*s\" int value \"%.*s\" out of range [%d, %d]\n",
-                        argNameLen, argName, valueTokenLen, valueTokenData, std::numeric_limits<int>::min(), std::numeric_limits<int>::max());
-                    }
-                    return {};
-                }
-                return {v};
-            };
+            ParseState parseState;
+            parseState.argc = argc;
+            parseState.argv = argv;
+            parseState.argIndex = &argIndex;
+            parseState.argName = argName;
+            parseState.argNameLen = argNameLen;
+            parseState.reportErrors = true;
 
-            auto ParseFloat = [this, argc, &argv, &argIndex, &argName, argNameLen](bool reportErrors = true) -> std::optional<float> {
-                argIndex++;
-                if (argIndex >= argc) {
-                    if (reportErrors) {
-                        ReportError("\"%.*s\" expected a float value\n", argNameLen, argName);
-                    }
-                    return {};
-                }
-                auto valueToken = std::string_view(argv[argIndex]);
-                auto valueTokenData = valueToken.data();
-                auto valueTokenLen = static_cast<int>(valueToken.size());
-                
-                auto v = strtof(valueTokenData, nullptr);
-                // TODO: 0 could be from garbage strings!
-                if (v == HUGE_VAL || v == HUGE_VALF || v == HUGE_VALL) {
-                    if (reportErrors) {
-                        ReportError("\"%.*s\" float value \"%.*s\" out of range\n", argNameLen, argName, valueTokenLen, valueTokenData);
-                    }
-                    return {};
-                }
-                return {v};
-            };
-
-            auto ParseDouble = [this, argc, &argv, &argIndex, &argName, argNameLen](bool reportErrors = true) -> std::optional<double> {
-                argIndex++;
-                if (argIndex >= argc) {
-                    if (reportErrors) {
-                        ReportError("\"%.*s\" expected a double value\n", argNameLen, argName);
-                    }
-                    return {};
-                }
-                auto valueToken = std::string_view(argv[argIndex]);
-                auto valueTokenData = valueToken.data();
-                auto valueTokenLen = static_cast<int>(valueToken.size());
-                
-                auto v = strtod(valueToken.data(), nullptr);
-                if (v == HUGE_VAL || v == HUGE_VALF || v == HUGE_VALL) {
-                    if (reportErrors) {
-                        ReportError("\"%.*s\" double value \"%.*s\" out of range\n", argNameLen, argName, valueTokenLen, valueTokenData);
-                    }
-                    return {};
-                }
-                return {v};
-            };
-            auto ParseStringLike = [this, argc, &argv, &argIndex, &argName, argNameLen](bool reportErrors = true) -> std::optional<const char*> {
-                argIndex++;
-                if (argIndex >= argc) {
-                    if (reportErrors) {
-                        ReportError("\"%.*s\" expected a string value\n", argNameLen, argName);
-                    }
-                    return {};
-                }
-                return {argv[argIndex]};
-            };
             bool success = std::visit([&](auto&& a) -> bool { 
                 using ValueType = typename std::remove_reference_t<decltype(a)>::value_type;
                 using ContainerType = typename std::remove_reference_t<decltype(a)>::container_type;
@@ -333,75 +272,30 @@ struct CommandLine {
                     assert(!positionalArg);
                     a.Get(t) = !a.Get(t);
                 } else if constexpr (std::is_same_v<ValueType*, ContainerType>) {
-                    if constexpr (std::is_same_v<int, ValueType>) {
-                        auto v =  ParseInt();
-                        if (!v) {
-                            return false;
-                        }
-                        a.Get(t) = v.value();
-                    } else if constexpr (std::is_same_v<float, ValueType>) {
-                        auto v = ParseFloat();
-                        if (!v) {
-                            return false;
-                        }
-                        a.Get(t) = v.value();
-                    } else if constexpr (std::is_same_v<double, ValueType>) {
-                        auto v = ParseDouble();
-                        if (!v) {
-                            return false;
-                        }
-                        a.Get(t) = v.value();
-                    } else if constexpr (std::is_same_v<std::string, ValueType> || std::is_same_v<std::string_view, ValueType>) {
-                        auto v = ParseStringLike();
-                        if (!v) {
-                            return false;
-                        }
-                        a.Get(t) = v.value();
-                    } else {
-                        static_assert(AlwaysFalse<ValueType>::value, "Unhandled Argument Type");
+                    auto v =  Parse<ValueType>(parseState);
+                    if (!v) {
+                        return false;
                     }
+                    a.Get(t) = v.value();
                 } else if constexpr (std::is_same_v<std::array<ValueType, 0>*, ContainerType>) {
-                    if constexpr (std::is_same_v<int, ValueType>) {
-                        if (!ParseArray(t, a, ParseInt)) {
-                            return false;
-                        }
-                    } else if constexpr (std::is_same_v<float, ValueType>) {
-                        if (!ParseArray(t, a, ParseFloat)) {
-                            return false;
-                        }
-                    } else if constexpr (std::is_same_v<double, ValueType>) {
-                        if (!ParseArray(t, a, ParseDouble)) {
-                            return false;
-                        }
-                    } else if constexpr (std::is_same_v<std::string, ValueType> || std::is_same_v<std::string_view, ValueType>) {
-                        if (!ParseArray(t, a, ParseStringLike)) {
-                            return false;
-                        }
-                    } else {
-                        static_assert(AlwaysFalse<ValueType>::value, "Unhandled Argument Type");
+                    if (!ParseArray(t, a, parseState)) {
+                        return false;
                     }
                 } else if constexpr (std::is_same_v<std::vector<ValueType>*, ContainerType>) {
                     auto minArgs = a.minArgs;
                     auto maxArgs = a.maxArgs;
-                    size_t c = 0;
-                    if constexpr (std::is_same_v<int, ValueType>) {
-                        c = ParseVector(t, a, argc, argv, &argIndex, ParseInt, false);
-                    } else if constexpr (std::is_same_v<float, ValueType>) {
-                        c = ParseVector(t, a, argc, argv, &argIndex, ParseFloat, false);
-                    } else if constexpr (std::is_same_v<double, ValueType>) {
-                        c = ParseVector(t, a, argc, argv, &argIndex, ParseDouble, false);
-                    } else if constexpr (std::is_same_v<std::string, ValueType> || std::is_same_v<std::string_view, ValueType>) {
-                        c = ParseVector(t, a, argc, argv, &argIndex, ParseStringLike, false);
-                    } else {
-                        static_assert(AlwaysFalse<ValueType>::value, "Unhandled Argument Type");
-                    }
-
+                    size_t c = ParseVector(t, a, parseState);
                     if (c < minArgs) {
                         ReportError("\"%.*s\" expected at least %zu arguments but only found %zu\n", argNameLen, argName, minArgs, a.Get(t).size());
                         return false;
                     }
                     if (c > maxArgs) {
                         ReportError("\"%.*s\" expected at most %zu arguments but found %zu\n", argNameLen, argName, maxArgs, a.Get(t).size());
+                        return false;
+                    }
+                } else if constexpr (std::is_same_v<UserContainer, ContainerType>) {
+                    bool res = ParseUserType(t, a, parseState);
+                    if (!res) {
                         return false;
                     }
                 } else {
@@ -569,12 +463,47 @@ private:
         const size_t maxArgs;
     };
 
+
+    template <typename>
+    struct UserPointer;
+
+    template <typename U, typename ...Args>
+    struct UserPointer<U(Args...)> : public DataPointer<U> {
+        using value_type = U;
+        using container_type = UserContainer;
+        
+        UserPointer(U* v) : DataPointer<U>(v) {};
+        UserPointer(U T::* v) : DataPointer<U>(v) {};
+
+        template <typename CommandLineT>
+        bool Parse(CommandLineT&& cl, T& t, ParseState state) {
+            auto parseResults = std::make_tuple(cl.template Parse<Args>(state)...);
+            std::optional<U> v = std::apply([](auto&&... optionals) -> std::optional<U> {
+                bool hasValues = (optionals.has_value() && ...);
+                if (!hasValues) {
+                    return {};
+                }
+                if constexpr (std::is_aggregate_v<U>) {
+                    return {U{std::forward<decltype(optionals.value())>(optionals.value())...}};
+                } else {
+                    return {U(std::forward<decltype(optionals.value())>(optionals.value())...)};
+                }
+            }, parseResults);
+            if (!v) {
+                return false;
+            }
+            this->Get(t) = v.value();
+            return true;
+        }
+    };
+
     using ArgumentVariant = std::variant<DataPointer<int>, ArrayPointer<int>, VectorPointer<int>,
         DataPointer<float>, ArrayPointer<float>, VectorPointer<float>, 
         DataPointer<double>, ArrayPointer<double>, VectorPointer<double>,
         DataPointer<bool>,
         DataPointer<std::string_view>, ArrayPointer<std::string_view>, VectorPointer<std::string_view>,
-        DataPointer<std::string>, ArrayPointer<std::string>, VectorPointer<std::string>>;
+        DataPointer<std::string>, ArrayPointer<std::string>, VectorPointer<std::string>,
+        UserPointer<UserTypes>...>;
     
     struct Arg {
         ArgumentVariant argument;
@@ -601,13 +530,113 @@ private:
     Arg MakeArg(std::vector<U> T::* vector, std::string_view name, std::string_view description, ParseFlags flags, bool isPositional) {
         return Arg{VectorPointer<U>{vector, MinArgs, MaxArgs}, name, description, flags, isPositional};
     }
+    
+    template <>
+    std::optional<int> Parse<int>(ParseState state) {
+        (*state.argIndex)++;
+        if (*state.argIndex >= state.argc) {
+            if (state.reportErrors) {
+                ReportError("\"%.*s\" expected an int value\n", state.argNameLen, state.argName);
+            }
+            return {};
+        }
+        auto valueToken = std::string_view(state.argv[*state.argIndex]);
+        auto valueTokenData = valueToken.data();
+        auto valueTokenLen = static_cast<int>(valueToken.size());
+        char* end = nullptr;
+        int64_t v = strtol(valueTokenData, &end, 10);
+        if (v == 0 && end == valueTokenData) {
+            if (state.reportErrors) {
+                ReportError("\"%.*s\" expected a string representing an int but instead found \"%.*s\"\n", state.argNameLen, state.argName, valueTokenLen, valueTokenData);
+            }
+            return {};
+        } else if (v < static_cast<int64_t>(std::numeric_limits<int>::min()) || v > static_cast<int64_t>(std::numeric_limits<int>::max())) {
+            if (state.reportErrors) {
+                ReportError("\"%.*s\" int value \"%.*s\" out of range [%d, %d]\n",
+                state.argNameLen, state.argName, valueTokenLen, valueTokenData, std::numeric_limits<int>::min(), std::numeric_limits<int>::max());
+            }
+            return {};
+        }
+        return {static_cast<int>(v)};
+    }
 
-    template <typename A, typename ParseFunc, typename ...FuncArgs>
-    bool ParseArray(T& t, A&& arrayPtr, ParseFunc&& parseFunc, FuncArgs&&... args) {
+    template <>
+    std::optional<float> Parse(ParseState state) {
+        (*state.argIndex)++;
+        if (*state.argIndex >= state.argc) {
+            if (state.reportErrors) {
+                ReportError("\"%.*s\" expected a float value\n", state.argNameLen, state.argName);
+            }
+            return {};
+        }
+        auto valueToken = std::string_view(state.argv[*state.argIndex]);
+        auto valueTokenData = valueToken.data();
+        auto valueTokenLen = static_cast<int>(valueToken.size());
+        
+        float v = strtof(valueTokenData, nullptr);
+        // TODO: 0 could be from garbage strings!
+        if (v == HUGE_VAL || v == HUGE_VALF || v == HUGE_VALL) {
+            if (state.reportErrors) {
+                ReportError("\"%.*s\" float value \"%.*s\" out of range\n", state.argNameLen, state.argName, valueTokenLen, valueTokenData);
+            }
+            return {};
+        }
+        return {v};
+    };
+
+    template <>
+    std::optional<double> Parse(ParseState state) {
+        (*state.argIndex)++;
+        if (*state.argIndex >= state.argc) {
+            if (state.reportErrors) {
+                ReportError("\"%.*s\" expected a double value\n", state.argNameLen, state.argName);
+            }
+            return {};
+        }
+        auto valueToken = std::string_view(state.argv[*state.argIndex]);
+        auto valueTokenData = valueToken.data();
+        auto valueTokenLen = static_cast<int>(valueToken.size());
+        
+        double v = strtod(valueToken.data(), nullptr);
+        if (v == HUGE_VAL || v == HUGE_VALF || v == HUGE_VALL) {
+            if (state.reportErrors) {
+                ReportError("\"%.*s\" double value \"%.*s\" out of range\n", state.argNameLen, state.argName, valueTokenLen, valueTokenData);
+            }
+            return {};
+        }
+        return {v};
+    };
+
+    template <>
+    std::optional<std::string> Parse(ParseState state) {
+        (*state.argIndex)++;
+        if (*state.argIndex >= state.argc) {
+            if (state.reportErrors) {
+                ReportError("\"%.*s\" expected a string value\n", state.argNameLen, state.argName);
+            }
+            return {};
+        }
+        return {state.argv[*state.argIndex]};
+    };
+
+    template <>
+    std::optional<std::string_view> Parse(ParseState state) {
+        (*state.argIndex)++;
+        if (*state.argIndex >= state.argc) {
+            if (state.reportErrors) {
+                ReportError("\"%.*s\" expected a string value\n", state.argNameLen, state.argName);
+            }
+            return {};
+        }
+        return {state.argv[*state.argIndex]};
+    };
+
+    template <typename A>
+    bool ParseArray(T& t, A&& arrayPtr, ParseState state) {
         auto* curr = arrayPtr.Begin(t);
         auto* end = arrayPtr.End(t);
         while (curr != end) {
-            auto v = parseFunc(std::forward<FuncArgs&&>(args)...);
+            auto v = Parse<typename std::remove_reference_t<A>::value_type>(state); 
             if (!v) {
                 return false;
             }
@@ -617,17 +646,17 @@ private:
         return true;
     }
     
-    template <typename Vec, typename ParseFunc, typename ...FuncArgs>
-    size_t ParseVector(T& t, Vec&& vecPtr, int argc, char** const argv, int* argIndex, ParseFunc&& parseFunc, FuncArgs&&... args) {
+    template <typename Vec>
+    size_t ParseVector(T& t, Vec&& vecPtr, ParseState state) {
         // For vectors we just consume until we can no longer consume any more
         auto& vec = vecPtr.Get(t);
         vec.clear();
         size_t i = 0;
-        for (; *argIndex <= argc; ++i) {
-            int nextIndex = (*argIndex) + 1;
+        for (; *state.argIndex <= state.argc; ++i) {
+            int nextIndex = (*state.argIndex) + 1;
             // Stop consuming if it looks like we're about to step onto a named arg
-            if (nextIndex < argc) {
-                std::string_view token = std::string_view{argv[nextIndex]};
+            if (nextIndex < state.argc) {
+                std::string_view token = std::string_view{state.argv[nextIndex]};
                 if (token.size() >= 1) {
                     bool looksLikeAnArg = false;
                     for (const auto& arg : args_) {
@@ -641,15 +670,22 @@ private:
                     }
                 }
             }
-            auto v = parseFunc(std::forward<FuncArgs&&>(args)...);
+            state.reportErrors = false;
+            auto v = Parse<typename std::remove_reference_t<Vec>::value_type>(state); 
             if (!v) {
-                *argIndex -= 1;
+                (*state.argIndex) -= 1;
                 break;
             }
             vec.push_back(v.value());
         }
         return i;
     }
+
+    template <typename UserPointerT>
+    bool ParseUserType(T& t, UserPointerT&& userPointer, ParseState state) {
+        return userPointer.Parse(*this, t, state);
+    };
+
 
     void AppendNameAndType(const Arg& arg, StringBuilder& stringBuilder, int indent, ParseFlags flags) {
         std::visit([&](auto&& a) { 
@@ -673,16 +709,16 @@ private:
             if constexpr (std::is_same_v<bool, ValueType>) {
                 stringBuilder.AppendAtomic(indent, "%s%s%.*s%s", usagePrefix, namePrefix, argNameLen, argNameData, usageSuffix);
             } else if constexpr (std::is_same_v<ValueType*, ContainerType>) {
-                const char* typeString = std::visit([](auto&& a) { return TypeInfo<decltype(a)>::String(); }, arg.argument);
+                const char* typeString = TypeInfo<ValueType>::String();
                 stringBuilder.AppendAtomic(indent, "%s%s%.*s <%s>%s", usagePrefix, namePrefix, argNameLen, argNameData, typeString, usageSuffix);
             } else if constexpr (std::is_same_v<std::array<ValueType, 0>*, ContainerType>) {
                 auto size = a.Size();
-                const char* typeString = std::visit([](auto&& a) { return TypeInfo<decltype(a)>::String(); }, arg.argument);
+                const char* typeString = TypeInfo<ValueType>::String();
                 stringBuilder.AppendAtomic(indent, "%s%s%.*s <%s[%zu]>%s", usagePrefix, namePrefix, argNameLen, argNameData, typeString, size, usageSuffix);
             } else if constexpr (std::is_same_v<std::vector<ValueType>*, ContainerType>) {
                 auto minArgs = a.minArgs;
                 auto maxArgs = a.maxArgs;
-                const char* typeString = std::visit([](auto&& a) { return TypeInfo<decltype(a)>::String(); }, arg.argument);
+                const char* typeString = TypeInfo<ValueType>::String();
                 if (minArgs != 0 && maxArgs != std::numeric_limits<size_t>::max()) {
                     stringBuilder.AppendAtomic(indent, "%s%s%.*s <%s[%zu:%zu]>%s", usagePrefix, namePrefix, argNameLen, argNameData, typeString, minArgs, maxArgs, usageSuffix);
                 } else if (minArgs != 0 && maxArgs == std::numeric_limits<size_t>::max()) {
@@ -693,7 +729,8 @@ private:
                     stringBuilder.AppendAtomic(indent, "%s%s%.*s <%s[...]>%s", usagePrefix, namePrefix, argNameLen, argNameData, typeString, usageSuffix);
                 }
             } else {
-                static_assert(AlwaysFalse<ValueType>::value, "Unhandled Argument Type");
+                ReportError("Unhandled Argument Type\n"); 
+                //static_assert(AlwaysFalse<ValueType>::value, "Unhandled Argument Type");
             }
         }, arg.argument);
     }
@@ -751,7 +788,7 @@ private:
                 defaultBuilder.AppendAtomic("%s", a.Get(t) ? "true" : "false");
             } else if constexpr (std::is_same_v<ValueType*, ContainerType>) {
                 (void)ArrayDefault;
-                const char* typeString = std::visit([](auto&& a) { return TypeInfo<decltype(a)>::String(); }, arg.argument);
+                const char* typeString = TypeInfo<ValueType>::String();
                 usageBuilder.AppendAtomic(usageIndent, " %s%s%.*s <%s>%s", usagePrefix, namePrefix, argNameLen, argNameData, typeString, usageSuffix);
 
                 descriptionIndent = FormattedLength("    %s%.*s <%s>", namePrefix, argNameLen, argNameData, typeString);
@@ -765,7 +802,7 @@ private:
                     defaultBuilder.AppendAtomic("%s", to_string(a.Get(t)).c_str());
                 }
             } else if constexpr (std::is_same_v<std::array<ValueType, 0>*, ContainerType>) {
-                const char* typeString = std::visit([](auto&& a) { return TypeInfo<decltype(a)>::String(); }, arg.argument);
+                const char* typeString = TypeInfo<ValueType>::String();
                 auto size = a.Size();
                 usageBuilder.AppendAtomic(usageIndent, " %s%s%.*s <%s[%zu]>%s", usagePrefix, namePrefix, argNameLen, argNameData, typeString, size, usageSuffix);
 
@@ -774,7 +811,7 @@ private:
                 
                 ArrayDefault(a.Begin(t), size);
             } else if constexpr (std::is_same_v<std::vector<ValueType>*, ContainerType>) {
-                const char* typeString = std::visit([](auto&& a) { return TypeInfo<decltype(a)>::String(); }, arg.argument);
+                const char* typeString = TypeInfo<ValueType>::String();
                 auto minArgs = a.minArgs;
                 auto maxArgs = a.maxArgs;
                 ArrayDefault(a.Get(t).begin(), a.Get(t).size());
@@ -797,7 +834,8 @@ private:
                     descriptionBuilder.AppendAtomic(0, "    %s%.*s <%s[...]>", namePrefix, argNameLen, argNameData, typeString);
                 }
             } else {
-                static_assert(AlwaysFalse<ValueType>::value, "Unhandled Argument Type");
+                printf("Unhandled Argument Type\n");
+                //static_assert(AlwaysFalse<ValueType>::value, "Unhandled Argument Type");
             }
         }, arg.argument);
                     
@@ -1026,7 +1064,7 @@ template <> struct TypeInfo<std::string_view> {
     static const char* String() { return "string"; }
 };
 template <typename T> struct TypeInfo {
-    static const char* String() { return TypeInfo<typename std::remove_reference_t<T>::value_type>::String(); }
+    static const char* String() { return ""; }
 };
 
 } // namespace clue

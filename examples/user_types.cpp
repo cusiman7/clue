@@ -18,13 +18,15 @@ struct Args {
     Repeat repeat;
 };
 
-int main(int argc, char** argv) {
-    clue::CommandLine<Args, 
-        Vec3(float, float, float), 
-        Repeat(int, std::string_view)> cl("User Types");
+using CommandLine = clue::CommandLine<Args, 
+    Vec3(float, float, float),
+    Repeat(int, std::string_view)>;
 
-    cl.Optional(&Args::vec, "vec", "A 3 value Vector");
-    cl.Optional(&Args::repeat, "repeat", "Repeate a phrase N times");
+int main(int argc, char** argv) {
+    CommandLine cl("User Types");
+
+    cl.Optional(&Args::vec, "vec", "A 3 value Vector (Default: 1.0, 2.0, 3.0)");
+    cl.Optional(&Args::repeat, "repeat", "Repeat a phrase N times (Default: 3, Hello Clue!)");
 
     auto args = cl.ParseArgs(argc, argv);
     printf("Vec3(%f, %f, %f)\n", args->vec.x, args->vec.y, args->vec.z);

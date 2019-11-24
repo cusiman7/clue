@@ -320,7 +320,6 @@ struct CommandLine {
                 missingSomething = true;
                 sb.AppendChar(' ', 4);
                 AppendNameAndType(arg, sb, 0, currentFlags_);
-                //sb.AppendAtomic("    %.*s", static_cast<int>(arg.name.size()), arg.name.data());
                 sb.NewLine();
             }
         }
@@ -329,7 +328,6 @@ struct CommandLine {
                 missingSomething = true;
                 sb.AppendChar(' ', 4);
                 AppendNameAndType(arg, sb, 0, currentFlags_);
-                //sb.AppendAtomic("    %.*s", static_cast<int>(arg.name.size()), arg.name.data());
                 sb.NewLine();
             }
         }
@@ -348,7 +346,7 @@ struct CommandLine {
         StringBuilder usageBuilder; // For building the first usage lines
         StringBuilder descriptionBuilder; // For building the description line per argument
 
-        // Default construct a T, for type info of ArrayMembers and default values
+        // Default construct a T, for type info of ArrayPointers and default values
         const static T t = {};
 
         // build usage line
@@ -375,12 +373,22 @@ struct CommandLine {
         //
         descriptionBuilder.AppendNatural(0, description_.data(), static_cast<int>(description_.size()));
         descriptionBuilder.NewLine(2);
-
-        for (const auto& arg : args_) {
-            DescribeArg(arg, t, usageIndent, usageBuilder, descriptionBuilder, flags);
+        
+        if (!positionalArgs_.empty()) {
+            descriptionBuilder.AppendAtomic(0, "Positional arguments:");
+            descriptionBuilder.NewLine(2);
         }
 
         for (const auto& arg : positionalArgs_) {
+            DescribeArg(arg, t, usageIndent, usageBuilder, descriptionBuilder, flags);
+        }
+        
+        if (!args_.empty()) {
+            descriptionBuilder.AppendAtomic(0, "Optional arguments:");
+            descriptionBuilder.NewLine(2);
+        }
+
+        for (const auto& arg : args_) {
             DescribeArg(arg, t, usageIndent, usageBuilder, descriptionBuilder, flags);
         }
 
@@ -463,10 +471,10 @@ private:
         const size_t maxArgs;
     };
 
-
     template <typename>
     struct UserPointer;
 
+    // Vec(float, float, float)
     template <typename U, typename ...Args>
     struct UserPointer<U(Args...)> : public DataPointer<U> {
         using value_type = U;
@@ -478,22 +486,25 @@ private:
         template <typename CommandLineT>
         bool Parse(CommandLineT&& cl, T& t, ParseState state) {
             auto parseResults = std::make_tuple(cl.template Parse<Args>(state)...);
-            std::optional<U> v = std::apply([](auto&&... optionals) -> std::optional<U> {
+            return std::apply([this, &t](auto&&... optionals) {
                 bool hasValues = (optionals.has_value() && ...);
                 if (!hasValues) {
-                    return {};
+                    return false;
                 }
                 if constexpr (std::is_aggregate_v<U>) {
-                    return {U{std::forward<decltype(optionals.value())>(optionals.value())...}};
+                    this->Get(t) = {U{std::forward<decltype(optionals.value())>(optionals.value())...}};
                 } else {
-                    return {U(std::forward<decltype(optionals.value())>(optionals.value())...)};
+                    this->Get(t) = {U(std::forward<decltype(optionals.value())>(optionals.value())...)};
                 }
+                return true;
             }, parseResults);
-            if (!v) {
-                return false;
-            }
-            this->Get(t) = v.value();
-            return true;
+        }
+
+        void AppendTypeString(StringBuilder& sb) const {
+            StringBuilder typesBuilder(64);
+            (..., typesBuilder.AppendAtomic(0, "%s ", TypeInfo<Args>::String()));
+            auto sv = typesBuilder.GetStringView();
+            sb.AppendAtomic("%.*s", static_cast<int>(sv.size()-1), sv.data());
         }
     };
 
@@ -686,7 +697,6 @@ private:
         return userPointer.Parse(*this, t, state);
     };
 
-
     void AppendNameAndType(const Arg& arg, StringBuilder& stringBuilder, int indent, ParseFlags flags) {
         std::visit([&](auto&& a) { 
             using ValueType = typename std::remove_reference_t<decltype(a)>::value_type;
@@ -728,9 +738,13 @@ private:
                 } else {
                     stringBuilder.AppendAtomic(indent, "%s%s%.*s <%s[...]>%s", usagePrefix, namePrefix, argNameLen, argNameData, typeString, usageSuffix);
                 }
+            } else if constexpr (std::is_same_v<UserContainer, ContainerType>) {
+                StringBuilder userBuilder(64);
+                a.AppendTypeString(userBuilder);
+                auto sv = userBuilder.GetStringView();
+                stringBuilder.AppendAtomic(indent, "%s%s%.*s <%s>%s", usagePrefix, namePrefix, argNameLen, argNameData, sv.data(), usageSuffix);
             } else {
-                ReportError("Unhandled Argument Type\n"); 
-                //static_assert(AlwaysFalse<ValueType>::value, "Unhandled Argument Type");
+                static_assert(AlwaysFalse<ValueType>::value, "Unhandled Argument Type");
             }
         }, arg.argument);
     }
@@ -778,21 +792,23 @@ private:
                 usageSuffix = "]"; 
             }
 
+            usageBuilder.AppendChar(' ');
+            descriptionBuilder.AppendChar(' ', 4);
             if constexpr (std::is_same_v<bool, ValueType>) {
                 (void)ArrayDefault;
-                usageBuilder.AppendAtomic(usageIndent, " %s%s%.*s%s", usagePrefix, namePrefix, argNameLen, argNameData, usageSuffix);
+                usageBuilder.AppendAtomic(usageIndent, "%s%s%.*s%s", usagePrefix, namePrefix, argNameLen, argNameData, usageSuffix);
 
                 descriptionIndent = FormattedLength("    %s%.*s", namePrefix, argNameLen, argNameData);
-                descriptionBuilder.AppendAtomic(0, "    %s%.*s", namePrefix, argNameLen, argNameData);
+                descriptionBuilder.AppendAtomic(0, "%s%.*s", namePrefix, argNameLen, argNameData);
 
                 defaultBuilder.AppendAtomic("%s", a.Get(t) ? "true" : "false");
             } else if constexpr (std::is_same_v<ValueType*, ContainerType>) {
                 (void)ArrayDefault;
                 const char* typeString = TypeInfo<ValueType>::String();
-                usageBuilder.AppendAtomic(usageIndent, " %s%s%.*s <%s>%s", usagePrefix, namePrefix, argNameLen, argNameData, typeString, usageSuffix);
+                usageBuilder.AppendAtomic(usageIndent, "%s%s%.*s <%s>%s", usagePrefix, namePrefix, argNameLen, argNameData, typeString, usageSuffix);
 
                 descriptionIndent = FormattedLength("    %s%.*s <%s>", namePrefix, argNameLen, argNameData, typeString);
-                descriptionBuilder.AppendAtomic(0, "    %s%.*s <%s>", namePrefix, argNameLen, argNameData, typeString);
+                descriptionBuilder.AppendAtomic(0, "%s%.*s <%s>", namePrefix, argNameLen, argNameData, typeString);
 
                 if constexpr (std::is_same_v<std::string_view, ValueType>) {
                     defaultBuilder.AppendAtomic("%.*s", static_cast<int>(a.Get(t).size()), a.Get(t).data());
@@ -804,10 +820,10 @@ private:
             } else if constexpr (std::is_same_v<std::array<ValueType, 0>*, ContainerType>) {
                 const char* typeString = TypeInfo<ValueType>::String();
                 auto size = a.Size();
-                usageBuilder.AppendAtomic(usageIndent, " %s%s%.*s <%s[%zu]>%s", usagePrefix, namePrefix, argNameLen, argNameData, typeString, size, usageSuffix);
+                usageBuilder.AppendAtomic(usageIndent, "%s%s%.*s <%s[%zu]>%s", usagePrefix, namePrefix, argNameLen, argNameData, typeString, size, usageSuffix);
 
                 descriptionIndent = FormattedLength("    %s%.*s <%s[%zu]>", namePrefix, argNameLen, argNameData, typeString, size);
-                descriptionBuilder.AppendAtomic(0, "    %s%.*s <%s[%zu]>", namePrefix, argNameLen, argNameData, typeString, size);
+                descriptionBuilder.AppendAtomic(0, "%s%.*s <%s[%zu]>", namePrefix, argNameLen, argNameData, typeString, size);
                 
                 ArrayDefault(a.Begin(t), size);
             } else if constexpr (std::is_same_v<std::vector<ValueType>*, ContainerType>) {
@@ -817,25 +833,34 @@ private:
                 ArrayDefault(a.Get(t).begin(), a.Get(t).size());
 
                 if (minArgs != 0 && maxArgs != std::numeric_limits<size_t>::max()) {
-                    usageBuilder.AppendAtomic(usageIndent, " %s%s%.*s <%s[%zu:%zu]>%s", usagePrefix, namePrefix, argNameLen, argNameData, typeString, minArgs, maxArgs, usageSuffix);
+                    usageBuilder.AppendAtomic(usageIndent, "%s%s%.*s <%s[%zu:%zu]>%s", usagePrefix, namePrefix, argNameLen, argNameData, typeString, minArgs, maxArgs, usageSuffix);
                     descriptionIndent = FormattedLength("    %s%.*s <%s[%zu:%zu]>", namePrefix, argNameLen, argNameData, typeString, minArgs, maxArgs);
-                    descriptionBuilder.AppendAtomic(0, "    %s%.*s <%s[%zu:%zu]>", namePrefix, argNameLen, argNameData, typeString, minArgs, maxArgs);
+                    descriptionBuilder.AppendAtomic(0, "%s%.*s <%s[%zu:%zu]>", namePrefix, argNameLen, argNameData, typeString, minArgs, maxArgs);
                 } else if (minArgs != 0 && maxArgs == std::numeric_limits<size_t>::max()) {
-                    usageBuilder.AppendAtomic(usageIndent, " %s%s%.*s <%s[%zu:]>%s", usagePrefix, namePrefix, argNameLen, argNameData, typeString, minArgs, usageSuffix);
+                    usageBuilder.AppendAtomic(usageIndent, "%s%s%.*s <%s[%zu:]>%s", usagePrefix, namePrefix, argNameLen, argNameData, typeString, minArgs, usageSuffix);
                     descriptionIndent = FormattedLength("    %s%.*s <%s[%zu:]>", namePrefix, argNameLen, argNameData, typeString, minArgs);
-                    descriptionBuilder.AppendAtomic(0, "    %s%.*s <%s[%zu:]>", namePrefix, argNameLen, argNameData, typeString, minArgs);
+                    descriptionBuilder.AppendAtomic(0, "%s%.*s <%s[%zu:]>", namePrefix, argNameLen, argNameData, typeString, minArgs);
                 } else if (minArgs == 0 && maxArgs != std::numeric_limits<size_t>::max()) {
-                    usageBuilder.AppendAtomic(usageIndent, " %s%s%.*s <%s[:%zu]>%s", usagePrefix, namePrefix, argNameLen, argNameData, typeString, maxArgs, usageSuffix);
+                    usageBuilder.AppendAtomic(usageIndent, "%s%s%.*s <%s[:%zu]>%s", usagePrefix, namePrefix, argNameLen, argNameData, typeString, maxArgs, usageSuffix);
                     descriptionIndent = FormattedLength("    %s%.*s <%s[:%zu]>", namePrefix, argNameLen, argNameData, typeString, maxArgs);
-                    descriptionBuilder.AppendAtomic(0, "    %s%.*s <%s[:%zu]>", namePrefix, argNameLen, argNameData, typeString, maxArgs);
+                    descriptionBuilder.AppendAtomic(0, "%s%.*s <%s[:%zu]>", namePrefix, argNameLen, argNameData, typeString, maxArgs);
                 } else {
-                    usageBuilder.AppendAtomic(usageIndent, " %s%s%.*s <%s[...]>%s", usagePrefix, namePrefix, argNameLen, argNameData, typeString, usageSuffix);
+                    usageBuilder.AppendAtomic(usageIndent, "%s%s%.*s <%s[...]>%s", usagePrefix, namePrefix, argNameLen, argNameData, typeString, usageSuffix);
                     descriptionIndent = FormattedLength("    %s%.*s <%s[...]>", namePrefix, argNameLen, argNameData, typeString);
-                    descriptionBuilder.AppendAtomic(0, "    %s%.*s <%s[...]>", namePrefix, argNameLen, argNameData, typeString);
+                    descriptionBuilder.AppendAtomic(0, "%s%.*s <%s[...]>", namePrefix, argNameLen, argNameData, typeString);
                 }
+            } else if constexpr (std::is_same_v<UserContainer, ContainerType>) {
+                StringBuilder userBuilder(64);
+                a.AppendTypeString(userBuilder);
+                auto sv = userBuilder.GetStringView();
+                usageBuilder.AppendAtomic(usageIndent, "%s%s%.*s <%s>%s", usagePrefix, namePrefix, argNameLen, argNameData, sv.data(), usageSuffix);
+
+                descriptionIndent = FormattedLength("    %s%.*s <%s>", namePrefix, argNameLen, argNameData, sv.data());
+                descriptionBuilder.AppendAtomic(0, "%s%.*s <%s>", namePrefix, argNameLen, argNameData, sv.data());
+
+                flags |= kNoDefault;
             } else {
-                printf("Unhandled Argument Type\n");
-                //static_assert(AlwaysFalse<ValueType>::value, "Unhandled Argument Type");
+                static_assert(AlwaysFalse<ValueType>::value, "Unhandled Argument Type");
             }
         }, arg.argument);
                     

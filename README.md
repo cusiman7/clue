@@ -49,11 +49,12 @@ Print a message count times.
 * Detailed program "usage" string generation based on names, descriptions, types, and default values of arguments
 * Help output formatted to sensible line lengths for humans to read
 * Expressive type-aware error messages for your users
-* Support for the data types: `int`, `float`, `double`, `bool`, `string`, and `string_view`
-* Strong support for the `std::array<T, N>` container of any of the above primitive types (except bool)
-* Strong support for the `std::vector<T>` container of any of the above primitive types (except bool)
-* Support for structs composed of any of the above types
 * Support for positional and optional arguments
+* Support for the data types: `int`, `float`, `double`, `bool`, `string`, and `string_view`
+* Support for the `std::array<T, N>` container of any of the above primitive types (except bool)
+* Support for the `std::vector<T>` container of any of the above primitive types (except bool)
+* Support for structs composed of any of the above types
+* Full custom "user" types support for construction of your own types right from the command line (see below for examples) 
 * Configurable 
   * Support for allowing not exiting early on an error
   * Support for unrecognized arguments
@@ -61,6 +62,43 @@ Print a message count times.
   * Disabling defaults
   * Marking any or all arguments as required
 * Header only
+
+## More Powerful Examples
+
+```
+struct Vec3 {
+    float x = 1;
+    float y = 2;
+    float z = 3;
+};
+
+struct Repeat {
+    std::string_view phrase = "Hello Clue!";
+    int i = 3;
+};
+
+struct Args {
+    Vec3 vec;
+    Repeat repeat;
+};
+
+using CommandLine = clue::CommandLine<Args, 
+    Vec3(float, float, float),
+    Repeat(std::string_view, int)>;
+
+int main(int argc, char** argv) {
+    CommandLine cl("User Types");
+
+    cl.Optional(&Args::vec, "vec", "A 3 value Vector (Default: 1.0, 2.0, 3.0)");
+    cl.Optional(&Args::repeat, "repeat", "Repeat a phrase N times (Default: 3, Hello Clue!)");
+
+    auto args = cl.ParseArgs(argc, argv);
+    printf("Vec3(%f, %f, %f)\n", args->vec.x, args->vec.y, args->vec.z);
+    for (int i = 0; i < args->repeat.i; ++i) {
+        printf("%s\n", args->repeat.phrase.data());
+    }
+}
+```
 
 ## Roadmap
 * Enum for "choices" (from\_string helper required though?)

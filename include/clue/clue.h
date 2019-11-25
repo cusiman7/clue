@@ -775,6 +775,7 @@ private:
                     descriptionBuilder.AppendAtomic(0, "%s%.*s <%s[...]>", namePrefix, argNameLen, argNameData, typeString);
                 }
             } else if constexpr (std::is_same_v<UserContainer, ContainerType>) {
+                (void)ArrayDefault;
                 StringBuilder userBuilder(64);
                 a.AppendTypeString(userBuilder);
                 auto sv = userBuilder.GetStringView();

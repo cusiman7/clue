@@ -515,8 +515,7 @@ private:
         UserPointer(U T::* v) : DataPointer<U>(v) {};
 
         bool Parse(T& t, ParseState state) {
-            auto parseResults = std::make_tuple(::clue::Parse<Args>(state)...);
-            return std::apply([this, &t](auto&&... optionals) {
+            auto ParseAllOptionals = [this, &t](auto&&... optionals) {
                 bool hasValues = (optionals.has_value() && ...);
                 if (!hasValues) {
                     return false;
@@ -527,7 +526,8 @@ private:
                     this->Get(t) = {U(std::forward<decltype(optionals.value())>(optionals.value())...)};
                 }
                 return true;
-            }, parseResults);
+            };
+            return ParseAllOptionals(std::forward<decltype(::clue::Parse<Args>(state))>(::clue::Parse<Args>(state))...);
         }
 
         void AppendTypeString(StringBuilder& sb) const {
